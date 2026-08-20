@@ -83,9 +83,11 @@ export async function syncGitHubRepository(
 
   let filesWritten = 0;
   for (const file of files) {
-    // Per FR-7's back-reference requirement: the ref must let a human trace
-    // back to the exact GitHub blob.
-    const fileSourceRef = `github:${owner}/${repo}@${file.sha}:${file.path}`;
+    // Path-based identity: stable across commits, so a changed file's blob
+    // sha doesn't spawn a new "current" entity for the same path (see
+    // review Finding 3). Per FR-7's back-reference requirement, the exact
+    // blob is still traceable — via `attributes.sha`, not the identity key.
+    const fileSourceRef = `github:${owner}/${repo}:${file.path}`;
 
     const fileEntity = await upsertEntity({
       domain: "Code",
@@ -93,6 +95,7 @@ export async function syncGitHubRepository(
       name: file.path,
       sourceSystem: "github",
       sourceRef: fileSourceRef,
+      attributes: { sha: file.sha },
     });
 
     await recordRelationshipObservation({

@@ -54,9 +54,9 @@ describe("syncGitHubRepository", () => {
     expect(paths).toContain("CLAUDE.md");
     for (const entity of fileEntities) {
       expect(entity.sourceSystem).toBe("github");
-      expect(entity.sourceRef).toMatch(
-        new RegExp(`^github:${OWNER}/${REPO}@[0-9a-f]+:`),
-      );
+      expect(entity.sourceRef).toBe(`github:${OWNER}/${REPO}:${entity.name}`);
+      expect(typeof entity.attributes.sha).toBe("string");
+      expect((entity.attributes.sha as string).length).toBeGreaterThan(0);
     }
 
     const relationships = await queryRelationships({
@@ -98,6 +98,74 @@ describe("syncGitHubRepository", () => {
       fromEntityId: first.repositoryEntityId,
     });
     expect(relationships).toHaveLength(first.filesWritten);
+  });
+
+  test("path-based identity: re-syncing a changed blob sha updates the existing File entity's attributes.sha instead of creating a duplicate", async () => {
+    // Injects a synthetic tree (one fixed-path file) whose sha changes
+    // between the two sync calls, simulating "the file's content changed
+    // between commits" without depending on real repo history. Per review
+    // Finding 3, the File entity's source_ref is path-based (stable across
+    // commits), so this should update the existing entity's attributes.sha
+    // in place rather than spawning a second "current" entity for the same
+    // path.
+    const FAKE_PATH = "fake/path/for-identity-test.txt";
+    let callCount = 0;
+
+    const fetchImpl = (async (
+      url: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("/git/trees/")) {
+        callCount++;
+        const sha =
+          callCount === 1
+            ? "aaaa000000000000000000000000000000000a"
+            : "bbbb000000000000000000000000000000000b";
+        return new Response(
+          JSON.stringify({
+            tree: [{ path: FAKE_PATH, type: "blob", sha, size: 10 }],
+            truncated: false,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return fetch(url, init);
+    }) as unknown as typeof fetch;
+
+    const first = await syncGitHubRepository(
+      { owner: OWNER, repo: REPO },
+      { fetchImpl },
+    );
+    expect(first.status).toBe("ok");
+    if (first.status !== "ok") throw new Error("unreachable");
+
+    const second = await syncGitHubRepository(
+      { owner: OWNER, repo: REPO },
+      { fetchImpl },
+    );
+    expect(second.status).toBe("ok");
+    if (second.status !== "ok") throw new Error("unreachable");
+
+    expect(second.repositoryEntityId).toBe(first.repositoryEntityId);
+
+    const fileEntities = await findEntities({
+      domain: "Code",
+      entityType: "File",
+    });
+    const matches = fileEntities.filter((e) => e.name === FAKE_PATH);
+    expect(matches).toHaveLength(1);
+    expect(matches[0].sourceRef).toBe(`github:${OWNER}/${REPO}:${FAKE_PATH}`);
+    expect(matches[0].attributes.sha).toBe(
+      "bbbb000000000000000000000000000000000b",
+    );
+
+    const relationships = await queryRelationships({
+      relationshipType: "CONTAINS",
+      fromEntityId: first.repositoryEntityId,
+      toEntityId: matches[0].id,
+    });
+    expect(relationships).toHaveLength(1);
   });
 
   test("never fabricates data on failure: tree fetch fails after repo lookup succeeds -> ConnectionFailure, zero Brain writes", async () => {
