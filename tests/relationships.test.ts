@@ -197,6 +197,88 @@ describe("recordRelationshipObservation", () => {
     expect(provenanceAfterRetain.length).toBe(2); // no duplicate provenance row
   });
 
+  test("confidence-only change never triggers versioning: same attributes, different confidence, new source → corroborated", async () => {
+    const { from, to } = await makeEntityPair("confidence-not-versioning");
+
+    const first = await recordRelationshipObservation({
+      fromEntityId: from.id,
+      toEntityId: to.id,
+      relationshipType: "READS",
+      attributes: { table: "invoices" },
+      sourceSystem: "postgres",
+      sourceRef: "postgres:query-conf-1",
+      confidence: 0.4,
+    });
+    expect(first.action).toBe("created");
+    expect(first.relationship.confidence).toBe(0.4);
+
+    // Same identity, same attributes, DIFFERENT confidence, new
+    // (sourceSystem, sourceRef) — must be corroboration, not versioning.
+    // Confidence is explicitly excluded from change detection (see brief).
+    const second = await recordRelationshipObservation({
+      fromEntityId: from.id,
+      toEntityId: to.id,
+      relationshipType: "READS",
+      attributes: { table: "invoices" },
+      sourceSystem: "slack",
+      sourceRef: "slack:thread-conf-99",
+      confidence: 0.95,
+    });
+
+    expect(second.action).toBe("corroborated");
+    expect(second.relationship.id).toBe(first.relationship.id);
+    // Corroboration never touches the relationship row: confidence still
+    // reflects the ORIGINAL observation, not the new one.
+    expect(second.relationship.confidence).toBe(0.4);
+
+    const currentRow = await getRelationshipById(first.relationship.id);
+    expect(currentRow?.status).toBe("current");
+    expect(currentRow?.confidence).toBe(0.4);
+
+    // No versioning happened: only one relationship row exists for this
+    // identity, and it's still 'current'.
+    const allRows = await sql`
+      SELECT id, status FROM relationships
+      WHERE from_entity_id = ${from.id} AND to_entity_id = ${to.id} AND relationship_type = 'READS'
+    `;
+    expect(allRows.length).toBe(1);
+    expect(allRows[0]?.status).toBe("current");
+  });
+
+  test("deep-equality on nested attributes ignores object key order (not a naive JSON.stringify compare)", async () => {
+    const { from, to } = await makeEntityPair("deepequal-nested");
+
+    const first = await recordRelationshipObservation({
+      fromEntityId: from.id,
+      toEntityId: to.id,
+      relationshipType: "DEPENDS_ON",
+      attributes: {
+        criticality: "high",
+        meta: { region: "us-east-1", tier: 1 },
+      },
+      sourceSystem: "manual",
+      sourceRef: "test:deepequal-nested:1",
+    });
+    expect(first.action).toBe("created");
+
+    // Same nested structure, but with keys reordered at both the top level
+    // and inside the nested object — must still be treated as unchanged.
+    const second = await recordRelationshipObservation({
+      fromEntityId: from.id,
+      toEntityId: to.id,
+      relationshipType: "DEPENDS_ON",
+      attributes: {
+        meta: { tier: 1, region: "us-east-1" },
+        criticality: "high",
+      },
+      sourceSystem: "manual",
+      sourceRef: "test:deepequal-nested:2",
+    });
+
+    expect(second.action).toBe("corroborated");
+    expect(second.relationship.id).toBe(first.relationship.id);
+  });
+
   test("rejects a relationship type outside the controlled vocabulary before any DB write", async () => {
     const { from, to } = await makeEntityPair("invalid-type");
 
@@ -354,5 +436,44 @@ describe("updateRelationshipConfidence", () => {
     await expect(
       updateRelationshipConfidence(missingId, 0.5, "n/a"),
     ).rejects.toThrow(RelationshipNotFoundError);
+  });
+
+  test("throws RelationshipNotFoundError when the id resolves to a historical (superseded) row", async () => {
+    const { from, to } = await makeEntityPair("confidence-historical");
+
+    const created = await recordRelationshipObservation({
+      fromEntityId: from.id,
+      toEntityId: to.id,
+      relationshipType: "OWNED_BY",
+      attributes: { team: "payments" },
+      sourceSystem: "manual",
+      sourceRef: "test:confidence-historical:1",
+      confidence: 0.5,
+    });
+
+    // Version it so `created` becomes historical.
+    await recordRelationshipObservation({
+      fromEntityId: from.id,
+      toEntityId: to.id,
+      relationshipType: "OWNED_BY",
+      attributes: { team: "risk" },
+      sourceSystem: "manual",
+      sourceRef: "test:confidence-historical:2",
+    });
+
+    const historicalRow = await getRelationshipById(created.relationship.id);
+    expect(historicalRow?.status).toBe("historical");
+
+    await expect(
+      updateRelationshipConfidence(
+        created.relationship.id,
+        0.99,
+        "should not apply to a historical row",
+      ),
+    ).rejects.toThrow(RelationshipNotFoundError);
+
+    // Confirm the historical row's confidence was NOT silently mutated.
+    const stillHistorical = await getRelationshipById(created.relationship.id);
+    expect(stillHistorical?.confidence).toBe(0.5);
   });
 });

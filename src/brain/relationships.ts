@@ -220,7 +220,16 @@ export async function recordRelationshipObservation(
     return { action: "created", relationship };
   }
 
-  const unchanged = deepEqual(current.attributes, attributes);
+  // Compare against the JSON-round-tripped form of the incoming attributes,
+  // not the raw object: `attributes` is persisted via JSON.stringify (which
+  // drops keys with an explicit `undefined` value), and `current.attributes`
+  // was itself read back via JSON.parse. Comparing raw objects would treat
+  // e.g. `{a: 1, b: undefined}` as different from the stored `{a: 1}`, even
+  // though they serialize identically — a spurious `versioned` outcome.
+  const unchanged = deepEqual(
+    current.attributes,
+    JSON.parse(JSON.stringify(attributes)),
+  );
 
   if (unchanged) {
     // Step 4: current row exists, same attributes payload.
@@ -337,18 +346,35 @@ export async function supersedeRelationship(
   const toEntityId = newObservation.toEntityId ?? oldRelationship.toEntityId;
   const relationshipType =
     newObservation.relationshipType ?? oldRelationship.relationshipType;
-  const attributes = newObservation.attributes ?? {};
+  // Fall back to the old row's attributes when omitted, same as the identity
+  // fields above — an omitted `attributes` means "unchanged", not "wiped".
+  const attributes = newObservation.attributes ?? oldRelationship.attributes;
 
   const relationship = await sql.begin(async (tx) => {
     // Mark the old row historical FIRST: if the new identity happens to
     // match the old one, the partial unique index allows at most one
     // 'current' row per identity triple, so the old row must be retired
     // before the new current row is inserted.
-    await tx`
+    //
+    // The `AND status = 'current'` guard closes a concurrent-writer race: two
+    // transactions can both pass the initial SELECT (each seeing the row as
+    // 'current'), and because their INSERTs may target different identity
+    // triples, the partial unique index never fires to stop the second one.
+    // Without this guard the second transaction would silently re-retire an
+    // already-historical row, overwriting valid_until/superseded_by and
+    // orphaning the first transaction's new row from the supersession chain.
+    // With the guard, an UPDATE that affects zero rows means the row was
+    // already retired (or never resolved to current in the first place), and
+    // we throw instead of proceeding.
+    const [retired] = await tx`
       UPDATE relationships
       SET status = 'historical', valid_until = now()
-      WHERE id = ${oldRelationship.id}
+      WHERE id = ${oldRelationship.id} AND status = 'current'
+      RETURNING id
     `;
+    if (!retired) {
+      throw new RelationshipNotFoundError(oldRelationship.id);
+    }
 
     const [newRow] = await tx<RelationshipRow[]>`
       INSERT INTO relationships
@@ -388,6 +414,12 @@ export async function supersedeRelationship(
  * event. `reason` is accepted for the caller's own bookkeeping; there is no
  * schema column to persist it against without inventing one beyond Task 2's
  * DDL, so it is intentionally not persisted here.
+ *
+ * The `AND status = 'current'` guard enforces "current row only" from the
+ * brief: without it, this would happily mutate a historical (retired) row's
+ * confidence, silently corrupting what should be an immutable audit record.
+ * A zero-row update — id doesn't exist, or resolves to a historical row —
+ * throws RelationshipNotFoundError rather than silently no-op'ing.
  */
 export async function updateRelationshipConfidence(
   id: string,
@@ -398,7 +430,7 @@ export async function updateRelationshipConfidence(
   const [row] = await sql<RelationshipRow[]>`
     UPDATE relationships
     SET confidence = ${confidence}
-    WHERE id = ${id}
+    WHERE id = ${id} AND status = 'current'
     RETURNING *
   `;
   if (!row) {
