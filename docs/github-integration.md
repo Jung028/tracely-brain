@@ -32,6 +32,11 @@ function syncGitHubRepository(
 ): Promise<SyncResult>;
 ```
 
+*(The real implementation in `sync.ts` also accepts an optional second parameter,
+`opts?: SyncGitHubRepositoryOptions` — a test-only `fetchImpl` injection point used to
+deterministically simulate failure modes. It's omitted above since it's not part of the public
+contract; real callers should only ever pass `{ owner, repo }`.)*
+
 Fetches a repository's metadata and full recursive file tree from GitHub, then writes it into the
 Brain:
 
@@ -137,10 +142,12 @@ literal transcription of GitHub's status codes:
 - **`GITHUB_TOKEN`** (required) — a GitHub personal access token with `repo` scope. Read via
   `process.env.GITHUB_TOKEN` (`src/integrations/github/client.ts`'s `getGitHubToken()`). If unset
   or empty, every sync call returns `{ status: "not_connected" }` without making a network call.
-- **`GITHUB_REPO`** (used by tests, format `owner/repo`) — the target repository for local/test
-  syncs. `syncGitHubRepository` itself takes `{ owner, repo }` directly and does not read this env
-  var — it's a convention for tests and any future caller that wants a configured default target,
-  not part of the function's own contract.
+- **`GITHUB_REPO`** (format `owner/repo`) — set in `.env.test` alongside `GITHUB_TOKEN` per the
+  module's local-dev convention, but **not currently read by any code**. `syncGitHubRepository`
+  itself takes `{ owner, repo }` directly, and the test suite (`tests/integrations/github/*.test.ts`)
+  hardcodes its target repo as literal `OWNER`/`REPO` constants rather than reading this var. It's
+  reserved for a future caller that wants a configured default target, not part of any current
+  contract.
 
 Both are set in `.env.test` for local development/testing (gitignored) and have placeholder
 entries in `.env.example`.
