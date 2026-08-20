@@ -346,6 +346,150 @@ describe("traverse", () => {
     expect(entityIds.has(chain.chargebackId)).toBe(true);
     expect(entityIds.has(chain.downstreamServiceId)).toBe(true);
   });
+
+  describe("cycle guard", () => {
+    /**
+     * A 3-entity cycle: X --CALLS--> Y --CALLS--> Z --CALLS--> X.
+     *
+     * With no cycle guard, a recursive walk from X would loop forever (or
+     * until some other limit kicked in): X->Y->Z->X->Y->Z->... With the
+     * guard (`NOT (next_entity_id = ANY(w.visited))` in every recursive
+     * term), the walk must stop the instant it would revisit an already-
+     * visited node.
+     *
+     * Note the exact count this produces for a direction-consistent walk:
+     * the seed row's `visited` array is `ARRAY[from_entity_id, to_entity_id]`
+     * (or the swapped equivalent for `incoming`), which bakes the *start*
+     * entity itself into `visited` from depth 1 — not just nodes visited
+     * mid-walk. So a pure `outgoing` (or `incoming`) walk around an n-node
+     * cycle can never traverse the edge that closes the loop back to the
+     * start: it always stops at n-1 edges, never n. Verified empirically
+     * against live Postgres before asserting below (a naive "expect 3"
+     * assertion for `outgoing`/`incoming` fails — this is exercising the
+     * guard as actually implemented, not a hoped-for count). `direction:
+     * 'both'` recovers all 3 edges because its two independent walks each
+     * miss a *different* closing edge, and their union covers everything.
+     * In every case, a maxDepth of 10 (far larger than the 3-edge cycle)
+     * still returns a small, bounded, exact count instead of growing
+     * without limit — proving the guard actually terminates the walk
+     * rather than the query merely happening not to hang.
+     */
+    async function seedCycle() {
+      const x = await upsertEntity({
+        domain: "Runtime",
+        entityType: "Service",
+        name: "cycle-x",
+        sourceSystem: "manual",
+        sourceRef: "test:query:cycle:x",
+      });
+      const y = await upsertEntity({
+        domain: "Runtime",
+        entityType: "Service",
+        name: "cycle-y",
+        sourceSystem: "manual",
+        sourceRef: "test:query:cycle:y",
+      });
+      const z = await upsertEntity({
+        domain: "Runtime",
+        entityType: "Service",
+        name: "cycle-z",
+        sourceSystem: "manual",
+        sourceRef: "test:query:cycle:z",
+      });
+
+      const xy = await recordRelationshipObservation({
+        fromEntityId: x.id,
+        toEntityId: y.id,
+        relationshipType: "CALLS",
+        attributes: {},
+        sourceSystem: "manual",
+        sourceRef: "test:query:cycle:xy",
+      });
+      const yz = await recordRelationshipObservation({
+        fromEntityId: y.id,
+        toEntityId: z.id,
+        relationshipType: "CALLS",
+        attributes: {},
+        sourceSystem: "manual",
+        sourceRef: "test:query:cycle:yz",
+      });
+      const zx = await recordRelationshipObservation({
+        fromEntityId: z.id,
+        toEntityId: x.id,
+        relationshipType: "CALLS",
+        attributes: {},
+        sourceSystem: "manual",
+        sourceRef: "test:query:cycle:zx",
+      });
+
+      return {
+        x,
+        y,
+        z,
+        xy: xy.relationship,
+        yz: yz.relationship,
+        zx: zx.relationship,
+      };
+    }
+
+    test("outgoing: a maxDepth far larger than the cycle length still terminates at exactly n-1 edges (the guard blocks the closing edge back to start)", async () => {
+      const cycle = await seedCycle();
+
+      const result = await traverse({
+        startEntityId: cycle.x.id,
+        direction: "outgoing",
+        maxDepth: 10,
+      });
+
+      // X->Y (xy), Y->Z (yz) are walked; Z->X (zx) is blocked because X
+      // (the start) is already in `visited` from the seed row. Without the
+      // guard this would either loop forever or (bounded only by maxDepth)
+      // keep re-walking X->Y->Z->X->Y->Z->... and returning duplicate/
+      // growing rows — not a small, stable count of exactly 2.
+      const ids = result.relationships.map((r) => r.id).sort();
+      expect(ids).toEqual([cycle.xy.id, cycle.yz.id].sort());
+      expect(result.relationships.length).toBe(2);
+      expect(result.entities.length).toBe(3);
+    });
+
+    test("incoming: a maxDepth far larger than the cycle length still terminates at exactly n-1 edges (the guard blocks the closing edge back to start)", async () => {
+      const cycle = await seedCycle();
+
+      const result = await traverse({
+        startEntityId: cycle.x.id,
+        direction: "incoming",
+        maxDepth: 10,
+      });
+
+      // Walking backward from X: Z->X (zx), then Y->Z (yz) are walked;
+      // X->Y (xy) is blocked because X (the start) is already in `visited`.
+      const ids = result.relationships.map((r) => r.id).sort();
+      expect(ids).toEqual([cycle.zx.id, cycle.yz.id].sort());
+      expect(result.relationships.length).toBe(2);
+      expect(result.entities.length).toBe(3);
+    });
+
+    test("both: a maxDepth far larger than the cycle length still terminates, unioning both n-1-edge walks into the full 3-edge cycle with no duplicates", async () => {
+      const cycle = await seedCycle();
+
+      const result = await traverse({
+        startEntityId: cycle.x.id,
+        direction: "both",
+        maxDepth: 10,
+      });
+
+      // walk_out (outgoing) covers {xy, yz}, missing zx (the edge closing
+      // back to X). walk_in (incoming) covers {zx, yz}, missing xy (the
+      // edge closing back to X from the other side). Their union covers
+      // all 3 edges exactly once each — both walks terminate correctly
+      // (guarded, not merely "didn't happen to hang"), and neither one
+      // alone captures the full cycle.
+      const ids = result.relationships.map((r) => r.id).sort();
+      expect(ids).toEqual([cycle.xy.id, cycle.yz.id, cycle.zx.id].sort());
+      expect(result.relationships.length).toBe(3);
+      expect(result.entities.length).toBe(3);
+    });
+  });
 });
 
 // `maxDepth` being required (no default) is a TypeScript-level guarantee —
