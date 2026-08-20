@@ -6,8 +6,8 @@
 // thresholds, no confidence involved. Pure provenance (always additive,
 // never triggers versioning): source_system, source_ref, observed_at,
 // per-observation confidence, notes. See specs/01-company-brain.md and
-// .superpowers/sdd/linear-chasing-feigenbaum/task-4-brief.md for the exact
-// algorithm this module implements.
+// docs/company-brain-query-interface.md for the exact algorithm this module
+// implements and the write-path outcomes it produces.
 
 import { sql } from "./db";
 import {
@@ -110,20 +110,6 @@ async function findCurrentRelationship(
       AND status = 'current'
   `;
   return row ? rowToRelationship(row) : null;
-}
-
-async function findProvenance(
-  relationshipId: string,
-  sourceSystem: string,
-  sourceRef: string,
-): Promise<boolean> {
-  const [row] = await sql`
-    SELECT id FROM relationship_provenance
-    WHERE relationship_id = ${relationshipId}
-      AND source_system = ${sourceSystem}
-      AND source_ref = ${sourceRef}
-  `;
-  return row !== undefined;
 }
 
 async function insertProvenance(
@@ -232,28 +218,39 @@ export async function recordRelationshipObservation(
   );
 
   if (unchanged) {
-    // Step 4: current row exists, same attributes payload.
-    const alreadyObserved = await findProvenance(
-      current.id,
-      obs.sourceSystem,
-      obs.sourceRef,
-    );
+    // Step 4: current row exists, same attributes payload. A single atomic
+    // INSERT ... ON CONFLICT DO NOTHING replaces what was previously a
+    // separate SELECT-then-INSERT (find provenance, then insert if absent).
+    // The two-statement version left a race window: two concurrent
+    // observations of the identical (relationship_id, source_system,
+    // source_ref) could both see "not found" and both attempt the INSERT,
+    // with the second hitting the UNIQUE constraint and throwing a raw
+    // Postgres unique-violation instead of resolving to 'retained'. The
+    // atomic form has Postgres itself arbitrate: at most one INSERT can
+    // win, and the loser sees `DO NOTHING` with no row returned rather than
+    // an error.
+    const [inserted] = await sql<{ id: string }[]>`
+      INSERT INTO relationship_provenance
+        (relationship_id, source_system, source_ref, confidence, notes)
+      VALUES (
+        ${current.id},
+        ${obs.sourceSystem},
+        ${obs.sourceRef},
+        ${obs.confidence ?? null},
+        ${obs.notes ?? null}
+      )
+      ON CONFLICT (relationship_id, source_system, source_ref) DO NOTHING
+      RETURNING id
+    `;
 
-    if (alreadyObserved) {
-      // Idempotent re-ingestion: no-op.
+    if (!inserted) {
+      // No row was inserted → this exact (source_system, source_ref) was
+      // already recorded → idempotent re-ingestion, no-op.
       return { action: "retained", relationship: current };
     }
 
     // New source corroborating the same relationship: provenance only,
-    // relationship row untouched. Single statement — no transaction needed.
-    await insertProvenance(sql, {
-      relationshipId: current.id,
-      sourceSystem: obs.sourceSystem,
-      sourceRef: obs.sourceRef,
-      confidence: obs.confidence,
-      notes: obs.notes,
-    });
-
+    // relationship row untouched.
     return { action: "corroborated", relationship: current };
   }
 
