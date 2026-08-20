@@ -57,6 +57,8 @@ A module is not done because it runs. It's done when:
 - The diff has been reviewed against this file and the module's spec (self-review at minimum;
   prefer a second Claude Code session/subagent reviewing in a fresh context).
 - Nothing from a later module was implemented "while we were in there."
+- After finishing development of a spec (`specs/NN-*.md`), push the branch and open a PR — don't
+  leave a completed module sitting only on a local/pushed branch without one.
 
 ## MVP Acceptance Rubric (for reference — do not re-litigate weights)
 
