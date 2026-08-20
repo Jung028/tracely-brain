@@ -1,0 +1,8 @@
+{
+  "name": "tracely-brain",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "migrate": "bun run scripts/migrate.ts"
+  }
+}
