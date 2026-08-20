@@ -226,7 +226,21 @@ export interface TraverseParams {
   startEntityId: string;
   /** Omit = any type. */
   relationshipTypes?: RelationshipType[];
-  /** Default 'outgoing'. */
+  /**
+   * Default 'outgoing'.
+   *
+   * `'both'` unions two direction-consistent walks from the start entity —
+   * an outgoing-only walk (edges followed forward) and an incoming-only walk
+   * (edges followed backward) — then depth-collapses the combined result.
+   * It is NOT full undirected graph reachability: neither walk ever changes
+   * direction mid-path, so a node reachable only via a mixed forward/backward
+   * path is invisible at any depth. Example: given
+   * `ServiceA --DEPENDS_ON--> DB <--DEPENDS_ON-- ServiceB`,
+   * `traverse({ startEntityId: ServiceA.id, direction: 'both' })` returns the
+   * `ServiceA -> DB` edge but never reaches `ServiceB`, because there is no
+   * all-outgoing or all-incoming path from A to B — only a path that goes
+   * out then back in, which this union does not follow.
+   */
   direction?: "outgoing" | "incoming" | "both";
   /** REQUIRED — no default. Caller must always bound recursion explicitly. */
   maxDepth: number;
