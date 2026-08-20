@@ -61,6 +61,13 @@ export type {
 // middleware/interceptor framework.
 // ---------------------------------------------------------------------------
 
+// `actor` is currently always `undefined` — no public function in this
+// module accepts an actor/caller-identity parameter yet, so there is
+// nothing to populate it with. NFR-10's "purpose" field also isn't captured
+// anywhere in this seam. This hook is a placeholder shape only, not a
+// complete NFR-10 implementation; a future module wiring real audit logging
+// will need to add a context parameter to the public read/write functions
+// to populate `actor` (and any purpose field) for real.
 export interface BrainHookEvent {
   operation: string;
   actor?: string;

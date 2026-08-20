@@ -107,6 +107,10 @@ describe("getEntity", () => {
     const missingId = "00000000-0000-0000-0000-000000000000";
     await expect(getEntity(missingId)).rejects.toThrow(EntityNotFoundError);
   });
+
+  test("throws EntityNotFoundError (not a raw Postgres error) for a malformed id", async () => {
+    await expect(getEntity("not-a-uuid")).rejects.toThrow(EntityNotFoundError);
+  });
 });
 
 describe("findEntities", () => {

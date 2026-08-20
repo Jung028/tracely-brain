@@ -6,6 +6,19 @@ function isDomain(value: string): value is Domain {
   return (Domain as readonly string[]).includes(value);
 }
 
+// A malformed id string sent straight to Postgres as a `uuid` parameter
+// fails with raw error code 22P02 ("invalid input syntax for type uuid")
+// instead of the module's typed EntityNotFoundError. Validating the shape
+// up front lets a bad id resolve to the same typed "not found" outcome as
+// a well-formed id that simply doesn't exist, without a try/catch on every
+// call site.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isWellFormedUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
+
 interface EntityRow {
   id: string;
   domain: string;
@@ -74,6 +87,9 @@ export async function upsertEntity(input: {
 }
 
 export async function getEntity(id: string): Promise<Entity> {
+  if (!isWellFormedUuid(id)) {
+    throw new EntityNotFoundError(id);
+  }
   const [row] = await sql<EntityRow[]>`SELECT * FROM entities WHERE id = ${id}`;
   if (!row) {
     throw new EntityNotFoundError(id);

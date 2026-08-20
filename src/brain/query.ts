@@ -3,9 +3,9 @@
 // not part of this plan) to retrieve context from the Brain.
 //
 // Pure data access only: no hypothesis generation, no evidence scoring, no
-// investigation logic. See .superpowers/sdd/linear-chasing-feigenbaum/
-// task-5-brief.md for the exact signatures and the recursive CTE this module
-// implements.
+// investigation logic. See specs/01-company-brain.md and
+// docs/company-brain-query-interface.md for the exact signatures and the
+// recursive CTE this module implements.
 
 import { sql } from "./db";
 import { Domain, RelationshipType } from "./types";
@@ -101,6 +101,18 @@ function rowToProvenance(row: ProvenanceRow): Provenance {
 // isValidRelationshipType
 // ---------------------------------------------------------------------------
 
+// A malformed id string sent straight to Postgres as a `uuid` parameter
+// fails with raw error code 22P02 ("invalid input syntax for type uuid")
+// instead of a graceful "not found" result. See entities.ts for the same
+// check applied to getEntity — duplicated here rather than shared, per this
+// file's convention of each module owning its own small helpers.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isWellFormedUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
+
 export function isValidRelationshipType(
   value: string,
 ): value is RelationshipType {
@@ -175,7 +187,7 @@ export async function queryRelationships(
       )
       AND (${fromEntityId}::uuid IS NULL OR r.from_entity_id = ${fromEntityId})
       AND (${toEntityId}::uuid IS NULL OR r.to_entity_id = ${toEntityId})
-    ORDER BY r.created_at
+    ORDER BY r.created_at, r.id
     LIMIT ${limit}
   `;
 
@@ -209,6 +221,13 @@ export async function getRelationshipHistory(
 export async function getProvenance(
   relationshipId: string,
 ): Promise<Provenance[]> {
+  // A malformed id can never match a row — short-circuit before it reaches
+  // Postgres as a `uuid` parameter and raises 22P02 instead of this
+  // function's normal "nothing found" convention (an empty array).
+  if (!isWellFormedUuid(relationshipId)) {
+    return [];
+  }
+
   const rows = await sql<ProvenanceRow[]>`
     SELECT * FROM relationship_provenance
     WHERE relationship_id = ${relationshipId}
@@ -261,6 +280,24 @@ export async function traverse(
   params: TraverseParams,
 ): Promise<TraverseResult> {
   const { startEntityId, maxDepth } = params;
+
+  // maxDepth is REQUIRED but not otherwise validated by the type system — a
+  // caller passing 0 or a negative number would still reach the recursive
+  // CTE below, where only the *recursive* term checks `depth < maxDepth`;
+  // the seed term has no such check, so 0/negative would still return one
+  // hop instead of the empty result the caller asked for. Guard it here
+  // instead of relying on SQL to express "not a positive integer".
+  if (!Number.isInteger(maxDepth) || maxDepth < 1) {
+    return { entities: [], relationships: [] };
+  }
+
+  // Same rationale as getProvenance above: a malformed startEntityId can
+  // never match a row, so short-circuit before it reaches Postgres as a
+  // `uuid` parameter and raises 22P02.
+  if (!isWellFormedUuid(startEntityId)) {
+    return { entities: [], relationships: [] };
+  }
+
   const types =
     params.relationshipTypes && params.relationshipTypes.length > 0
       ? params.relationshipTypes

@@ -45,6 +45,13 @@ CREATE TABLE relationships (
 );
 
 -- Core versioning invariant: at most one CURRENT relationship per identity triple.
+-- NOTE: this schema is single-tenant by design — multi-tenancy (NFR-6) is
+-- deliberately deferred per NFR-15's "one company's Brain" MVP scoping.
+-- Adding a tenant_id later is the single most expensive future migration
+-- this schema implies: it would require altering this unique index (and the
+-- entities table's UNIQUE (source_system, source_ref) key) to include
+-- tenant_id, plus updating every query predicate in query.ts/relationships.ts
+-- that currently assumes a single implicit tenant.
 CREATE UNIQUE INDEX relationships_current_identity_uniq
   ON relationships (from_entity_id, to_entity_id, relationship_type)
   WHERE status = 'current';

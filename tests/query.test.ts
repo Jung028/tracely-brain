@@ -172,6 +172,24 @@ describe("queryRelationships", () => {
     expect(results.map((r) => r.id)).toEqual([abV2.id]);
   });
 
+  test("limit bounds the result set and orders deterministically (tie-breaker on r.id)", async () => {
+    await seedMultiDomainFixture();
+
+    const limited = await queryRelationships({ status: "any", limit: 2 });
+    expect(limited.length).toBe(2);
+
+    // Re-running the identical query must return the identical ordering —
+    // ORDER BY created_at alone has no tie-breaker, so rows sharing a
+    // created_at (common under bulk ingestion in one transaction) would
+    // otherwise return in a nondeterministic subset.
+    const limitedAgain = await queryRelationships({ status: "any", limit: 2 });
+    expect(limitedAgain.map((r) => r.id)).toEqual(limited.map((r) => r.id));
+
+    const all = await queryRelationships({ status: "any" });
+    expect(all.length).toBe(3);
+    expect(limited.map((r) => r.id)).toEqual(all.slice(0, 2).map((r) => r.id));
+  });
+
   test("status: 'historical' returns superseded rows", async () => {
     const { abV1 } = await seedMultiDomainFixture();
 
@@ -236,7 +254,7 @@ describe("getProvenance", () => {
     }
   });
 
-  test("returns an empty array for a relationship with no extra corroboration beyond creation", async () => {
+  test("returns exactly the creating observation when nothing further corroborated it", async () => {
     const { abV2 } = await seedMultiDomainFixture();
 
     const provenance = await getProvenance(abV2.id);
@@ -345,6 +363,19 @@ describe("traverse", () => {
     const entityIds = new Set(result.entities.map((e) => e.id));
     expect(entityIds.has(chain.chargebackId)).toBe(true);
     expect(entityIds.has(chain.downstreamServiceId)).toBe(true);
+  });
+
+  test("maxDepth of 0 or negative returns an empty result without querying", async () => {
+    const chain = await seedExampleChain();
+
+    const zero = await traverse({ startEntityId: chain.chargebackId, maxDepth: 0 });
+    expect(zero).toEqual({ entities: [], relationships: [] });
+
+    const negative = await traverse({
+      startEntityId: chain.chargebackId,
+      maxDepth: -3,
+    });
+    expect(negative).toEqual({ entities: [], relationships: [] });
   });
 
   describe("cycle guard", () => {
