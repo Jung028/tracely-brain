@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun test && bun run typecheck"
+            "command": "env -u GITHUB_TOKEN bun test && bun run typecheck"
           }
         ]
       }

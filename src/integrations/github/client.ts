@@ -180,10 +180,25 @@ export async function getTreeRecursive(
     return result;
   }
 
-  const rawTree = (result.data as { tree?: unknown } | null)?.tree;
-  const tree = Array.isArray(rawTree) ? rawTree : [];
+  const rawData = result.data as { tree?: unknown; truncated?: unknown } | null;
+  const rawTree = rawData?.tree;
 
-  const entries: GitHubTreeEntry[] = tree.map((entry) => {
+  if (!Array.isArray(rawTree)) {
+    return {
+      status: "query_failed",
+      detail: "malformed tree response: missing tree array",
+    };
+  }
+
+  if (rawData?.truncated === true) {
+    return {
+      status: "query_failed",
+      detail:
+        "tree truncated by GitHub; repo too large for a single tree fetch",
+    };
+  }
+
+  const entries: GitHubTreeEntry[] = rawTree.map((entry) => {
     const e = entry as {
       path: string;
       type: "blob" | "tree";

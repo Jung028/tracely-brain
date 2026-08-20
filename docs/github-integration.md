@@ -43,8 +43,9 @@ Brain:
 - One `Repository` entity (`domain: "Code"`, `entityType: "Repository"`, `sourceSystem: "github"`,
   `sourceRef: "github:{owner}/{repo}"`).
 - One `File` entity per tree entry where `type === "blob"` (`domain: "Code"`,
-  `entityType: "File"`, `sourceRef: "github:{owner}/{repo}@{sha}:{path}"` — this ref format lets a
-  human trace back to the exact GitHub blob).
+  `entityType: "File"`, `sourceRef: "github:{owner}/{repo}:{path}"` — path-based so identity stays
+  stable across commits; `attributes.sha` carries the blob sha so a human can still trace back to
+  the exact GitHub blob without it being part of the identity key).
 - One `CONTAINS` relationship per file, from the Repository entity to the File entity, via module
   01's `recordRelationshipObservation` — this makes re-syncing naturally idempotent through module
   01's existing `retained`/`corroborated` write-path outcomes.
@@ -56,7 +57,12 @@ scope cut; nothing in this module's requirements need it yet.
 **Ordering guarantee ("never fabricate data on failure"):** both the repo lookup and the full
 recursive tree fetch must succeed *before any write to the Brain begins*. If either fetch resolves
 to a `ConnectionFailure`, `syncGitHubRepository` returns it immediately with zero writes having
-occurred — no partial, guessed, or placeholder data ever lands in the Brain.
+occurred — no partial, guessed, or placeholder data ever lands in the Brain. This guarantee covers
+GitHub-side failures only (auth, permissions, network, rate-limit, not-found, malformed/truncated
+response) — on any of those, zero rows are written because the sync fails before any write begins.
+It does not cover a database-level failure mid-write (e.g. Postgres becoming unavailable partway
+through writing file entities); that scenario is not currently guarded by a transaction and could
+leave a partial write behind.
 
 **Example:**
 
@@ -113,9 +119,10 @@ guaranteed unaffected.
   the underlying `fetch` call threw), or GitHub returned HTTP 403 specifically because of rate
   limiting. `detail` carries the underlying error message, or `"rate limited"` for the rate-limit
   case.
-- **`query_failed`** — GitHub returned HTTP 404 (repo/ref not found), any other non-2xx status, or
-  a response body that couldn't be parsed as JSON. `detail` carries context (URL, status, or parse
-  error) about what went wrong.
+- **`query_failed`** — GitHub returned HTTP 404 (repo/ref not found), any other non-2xx status, a
+  response body that couldn't be parsed as JSON, a 200 tree response missing/malformed `tree`
+  array, or a tree response with `truncated: true` (repo too large for a single tree fetch).
+  `detail` carries context (URL, status, or parse error) about what went wrong.
 
 ---
 

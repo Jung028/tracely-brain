@@ -146,4 +146,52 @@ describe("getTreeRecursive", () => {
     expect(result).toEqual({ status: "not_connected" });
     expect(called).toBe(false);
   });
+
+  test("malformed response: injected 200 body with no tree array -> query_failed, not a silent empty sync", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ sha: "abc123" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+
+    const result = await getTreeRecursive("Jung028", "tracely-brain", "main", {
+      fetchImpl,
+    });
+
+    expect(result).toMatchObject({ status: "query_failed" });
+  });
+
+  test("malformed response: injected 200 body where tree is not an array -> query_failed", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ tree: "not-an-array" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+
+    const result = await getTreeRecursive("Jung028", "tracely-brain", "main", {
+      fetchImpl,
+    });
+
+    expect(result).toMatchObject({ status: "query_failed" });
+  });
+
+  test("truncated response: injected 200 body with truncated: true -> query_failed, not a partial silent sync", async () => {
+    const fetchImpl = (async () =>
+      new Response(
+        JSON.stringify({
+          tree: [{ path: "a.txt", type: "blob", sha: "deadbeef" }],
+          truncated: true,
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      )) as unknown as typeof fetch;
+
+    const result = await getTreeRecursive("Jung028", "tracely-brain", "main", {
+      fetchImpl,
+    });
+
+    expect(result).toMatchObject({ status: "query_failed" });
+  });
 });
