@@ -42,12 +42,18 @@ describe("addSupportingEvidence", () => {
 
   test("transitions to CONFIRMED once confidence crosses the threshold with zero contradicting evidence", () => {
     let h = proposeHypothesis("Scheduler is disabled");
-    // Each addSupportingEvidence call is independently reviewable — add
-    // enough that confidence provably crosses CONFIRMATION_THRESHOLD, not
-    // a magic single call.
-    for (let i = 0; i < 5; i++) {
+    // Each addSupportingEvidence call is independently reviewable — verify
+    // the exact boundary: stays INVESTIGATING at 3 items, transitions at 4.
+    for (let i = 0; i < 3; i++) {
       h = addSupportingEvidence(h, evidence());
     }
+    expect(h.supportingEvidence).toHaveLength(3);
+    expect(h.confidence).toBeLessThan(CONFIRMATION_THRESHOLD);
+    expect(h.status).toBe("INVESTIGATING");
+
+    // Now add the 4th item — should cross the threshold and transition to CONFIRMED
+    h = addSupportingEvidence(h, evidence());
+    expect(h.supportingEvidence).toHaveLength(4);
     expect(h.confidence).toBeGreaterThanOrEqual(CONFIRMATION_THRESHOLD);
     expect(h.status).toBe("CONFIRMED");
   });
@@ -65,16 +71,23 @@ describe("addSupportingEvidence", () => {
 describe("addContradictingEvidence", () => {
   test("transitions to REFUTED once contradicting weight crosses REFUTATION_THRESHOLD", () => {
     let h = proposeHypothesis("Scheduler is disabled");
-    for (let i = 0; i < 5; i++) {
+    // Verify the exact boundary: stays INVESTIGATING at 3 items, transitions at 4.
+    for (let i = 0; i < 3; i++) {
       h = addContradictingEvidence(h, evidence({ toolSource: "queryDatabase" }));
     }
+    expect(h.contradictingEvidence).toHaveLength(3);
+    expect(h.status).toBe("INVESTIGATING");
+
+    // Now add the 4th item — should cross the threshold and transition to REFUTED
+    h = addContradictingEvidence(h, evidence({ toolSource: "queryDatabase" }));
+    expect(h.contradictingEvidence).toHaveLength(4);
     expect(h.status).toBe("REFUTED");
   });
 
   test("a single weak contradiction does not refute the hypothesis outright", () => {
     const h = proposeHypothesis("Scheduler is disabled");
     const updated = addContradictingEvidence(h, evidence());
-    expect(updated.confidence).toBeLessThan(REFUTATION_THRESHOLD);
+    expect(updated.contradictingEvidence).toHaveLength(1);
     expect(updated.status).toBe("INVESTIGATING");
   });
 

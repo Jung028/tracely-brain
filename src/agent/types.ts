@@ -15,13 +15,14 @@ export interface Evidence {
 }
 
 export interface Hypothesis {
-  id: string;
-  statement: string;
-  supportingEvidence: Evidence[];
-  contradictingEvidence: Evidence[];
-  status: HypothesisStatus;
-  /** 0-1, recomputed on every evidence addition. See hypotheses.ts. */
-  confidence: number;
+  readonly id: string;
+  readonly statement: string;
+  readonly supportingEvidence: readonly Evidence[];
+  readonly contradictingEvidence: readonly Evidence[];
+  readonly status: HypothesisStatus;
+  /** Reflects accumulated supporting evidence only (via addSupportingEvidence).
+   * Contradicting evidence affects status but not confidence. Range: 0-1. */
+  readonly confidence: number;
 }
 
 export type InvestigationResult =

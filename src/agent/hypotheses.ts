@@ -19,8 +19,7 @@ export const REFUTATION_THRESHOLD = 0.75;
 
 // Each piece of evidence contributes a fixed increment, diminishing
 // slightly per additional item so a single tool call can't alone confirm a
-// hypothesis (five items of a kind cross 0.75 at increment 0.2; the loop in
-// the test above uses 5 for exactly this reason).
+// hypothesis (four items of a kind cross 0.75 at increment 0.2: 4 * 0.2 = 0.8 >= 0.75).
 function confidenceFrom(evidenceCount: number): number {
   const INCREMENT = 0.2;
   return Math.min(1, evidenceCount * INCREMENT);
