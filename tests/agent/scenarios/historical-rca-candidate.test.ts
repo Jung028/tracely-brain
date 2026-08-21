@@ -1,7 +1,8 @@
 // FR-29/FR-30: a historical incident surfaces as a *candidate* hypothesis
-// via query_brain's Operational Knowledge domain, but the agent must still
-// require fresh evidence (from a second tool type, search_code) before
-// CONFIRMED — spec explicitly calls out this rule as easy to accidentally
+// via a real query_brain search-mode call scoped to the Operational
+// Knowledge domain (FR-29), but the agent must still require fresh
+// evidence (from a second tool type, search_code) before CONFIRMED
+// (FR-30) — spec explicitly calls out this rule as easy to accidentally
 // skip, so it's tested directly rather than only covered incidentally.
 import { afterEach, describe, expect, test } from "bun:test";
 import { investigate } from "../../../src/agent/investigate";
@@ -27,6 +28,23 @@ describe("demo scenario: historical RCA as candidate, not proof", () => {
       if (!hypothesisId) hypothesisId = extractHypothesisId(bodyText);
 
       if (callIndex === 1) {
+        // FR-29: a real query_brain search-mode call scoped to Operational
+        // Knowledge, run BEFORE propose_hypothesis — this is what makes
+        // the seeded historical incident genuinely retrievable as a
+        // candidate hypothesis, not just a comment claiming it is.
+        return {
+          stop_reason: "tool_use",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_query_brain",
+              name: "query_brain",
+              input: { mode: "search", domain: "Operational Knowledge" },
+            },
+          ],
+        };
+      }
+      if (callIndex === 2) {
         // Models the historical match surfacing as a *candidate* only —
         // propose_hypothesis is what turns it into something trackable,
         // not query_brain alone.
@@ -44,7 +62,7 @@ describe("demo scenario: historical RCA as candidate, not proof", () => {
           ],
         };
       }
-      if (callIndex === 2) {
+      if (callIndex === 3) {
         return {
           stop_reason: "tool_use",
           content: [
@@ -57,7 +75,7 @@ describe("demo scenario: historical RCA as candidate, not proof", () => {
           ],
         };
       }
-      if (callIndex <= 7) {
+      if (callIndex <= 8) {
         return {
           stop_reason: "tool_use",
           content: [
@@ -85,13 +103,16 @@ describe("demo scenario: historical RCA as candidate, not proof", () => {
 
     expect(result.outcome).toBe("CONFIRMED");
     if (result.outcome !== "CONFIRMED") throw new Error("unreachable");
-    // Confirmation came from the 5 scripted update_hypothesis (fresh
-    // evidence) calls, not from the historical match by itself — the
-    // historical entity seeded above is never referenced by
-    // update_hypothesis at all, so a regression that let query_brain's
+    // FR-30: confirmation came from the 5 scripted update_hypothesis
+    // (fresh evidence) calls, not from the historical match by itself —
+    // the historical entity seeded above is retrieved by the real
+    // query_brain call above (FR-29), but it is never referenced by any
+    // update_hypothesis call, so a regression that let query_brain's
     // historical-domain result alone confirm a hypothesis would still
     // require these 5 real evidence items to pass, keeping this test a
     // faithful FR-30 guard.
     expect(result.evidenceTrail.length).toBe(5);
+    const toolSources = new Set(result.evidenceTrail.map((e) => e.toolSource));
+    expect(toolSources.size).toBeGreaterThanOrEqual(2);
   });
 });

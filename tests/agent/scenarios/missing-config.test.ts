@@ -37,6 +37,23 @@ describe("demo scenario: missing config", () => {
         };
       }
       if (callIndex === 2) {
+        // The real evidence: query_brain genuinely calls findEntities for
+        // the required config entity's domain and finds nothing seeded
+        // there — that absence is itself the scenario's evidence (see file
+        // header). This is a real tool_use, not just a toolSource label.
+        return {
+          stop_reason: "tool_use",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_query_brain",
+              name: "query_brain",
+              input: { mode: "search", domain: "Runtime" },
+            },
+          ],
+        };
+      }
+      if (callIndex === 3) {
         return {
           stop_reason: "tool_use",
           content: [
@@ -49,7 +66,7 @@ describe("demo scenario: missing config", () => {
           ],
         };
       }
-      if (callIndex <= 7) {
+      if (callIndex <= 8) {
         return {
           stop_reason: "tool_use",
           content: [
@@ -76,5 +93,8 @@ describe("demo scenario: missing config", () => {
     );
 
     expect(result.outcome).toBe("CONFIRMED");
+    if (result.outcome !== "CONFIRMED") throw new Error("unreachable");
+    const toolSources = new Set(result.evidenceTrail.map((e) => e.toolSource));
+    expect(toolSources.size).toBeGreaterThanOrEqual(2);
   });
 });

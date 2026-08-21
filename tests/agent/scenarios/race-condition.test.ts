@@ -38,9 +38,28 @@ describe("demo scenario: race condition (FR-20 end-to-end)", () => {
 
       if (!firstHypothesisId) firstHypothesisId = extractHypothesisId(bodyText);
 
-      // Turns 2-6: contradict the first hypothesis via query_brain until
-      // REFUTED (REFUTATION_THRESHOLD 0.75 at 0.2/item -> 5 items).
-      if (callIndex <= 6) {
+      if (callIndex === 2) {
+        // Real evidence-gathering turn for the first (incorrect)
+        // hypothesis: a genuine query_brain search_mode call, not just a
+        // toolSource label on an update_hypothesis call.
+        return {
+          stop_reason: "tool_use",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_query_brain",
+              name: "query_brain",
+              input: { mode: "search", domain: "Runtime" },
+            },
+          ],
+        };
+      }
+
+      // Turns 3-7: contradict the first hypothesis via query_brain until
+      // REFUTED (REFUTATION_THRESHOLD 0.75 at 0.2/item -> crosses at the
+      // 4th item; the 5th is a harmless no-op against an already-REFUTED
+      // hypothesis).
+      if (callIndex <= 7) {
         return {
           stop_reason: "tool_use",
           content: [
@@ -59,7 +78,7 @@ describe("demo scenario: race condition (FR-20 end-to-end)", () => {
         };
       }
 
-      if (callIndex === 7) {
+      if (callIndex === 8) {
         return {
           stop_reason: "tool_use",
           content: [
@@ -77,7 +96,7 @@ describe("demo scenario: race condition (FR-20 end-to-end)", () => {
         secondHypothesisId = extractHypothesisId(bodyText, firstHypothesisId);
       }
 
-      if (callIndex === 8) {
+      if (callIndex === 9) {
         return {
           stop_reason: "tool_use",
           content: [
@@ -91,7 +110,7 @@ describe("demo scenario: race condition (FR-20 end-to-end)", () => {
         };
       }
 
-      if (callIndex <= 13) {
+      if (callIndex <= 14) {
         return {
           stop_reason: "tool_use",
           content: [
@@ -121,5 +140,7 @@ describe("demo scenario: race condition (FR-20 end-to-end)", () => {
     expect(result.outcome).toBe("CONFIRMED");
     if (result.outcome !== "CONFIRMED") throw new Error("unreachable");
     expect(result.hypothesis.statement).toBe("Writer B's retry lacked the ordering guarantee");
+    const toolSources = new Set(result.evidenceTrail.map((e) => e.toolSource));
+    expect(toolSources.size).toBeGreaterThanOrEqual(2);
   });
 });
