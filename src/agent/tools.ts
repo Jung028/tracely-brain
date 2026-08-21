@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type { BetaRunnableTool } from "@anthropic-ai/sdk/lib/tools/BetaRunnableTool";
-import { findEntities, traverse } from "../brain";
+import { Domain, findEntities, RelationshipType, traverse } from "../brain";
 import { getFileContent } from "../integrations/github/client";
 import {
   addContradictingEvidence,
@@ -53,17 +53,17 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
     inputSchema: z.object({
       mode: z.enum(["search", "traverse"]),
       // search mode:
-      domain: z.string().optional().describe("Brain domain to search within, search mode only"),
+      domain: z.enum(Domain).optional().describe("Brain domain to search within, search mode only"),
       entityType: z.string().optional().describe("Entity type to search within, search mode only"),
       // traverse mode:
       startEntityId: z.string().optional().describe("Entity id to traverse from, traverse mode only"),
-      relationshipTypes: z.array(z.string()).optional(),
+      relationshipTypes: z.array(z.enum(RelationshipType)).optional(),
       maxDepth: z.number().int().min(1).max(5).default(2),
     }),
     run: async (input) => {
       if (input.mode === "search") {
         const entities = await findEntities({
-          domain: input.domain as never,
+          domain: input.domain,
           entityType: input.entityType,
         });
         return JSON.stringify(entities);
@@ -74,7 +74,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       }
       const result = await traverse({
         startEntityId: input.startEntityId,
-        relationshipTypes: input.relationshipTypes as never,
+        relationshipTypes: input.relationshipTypes,
         maxDepth: input.maxDepth,
       });
       return JSON.stringify(result);
