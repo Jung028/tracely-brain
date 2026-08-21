@@ -3,7 +3,6 @@
 // test database configured in .env.test — same DB the rest of the suite
 // already uses (see tests/setup.ts), so no separate fixture DB is needed.
 import { recordRelationshipObservation, upsertEntity } from "../../../src/brain";
-import { getFileContent, getRepo, getTreeRecursive } from "../../../src/integrations/github/client";
 
 export async function seedSchedulerDisabledScenario() {
   const scheduler = await upsertEntity({
@@ -47,47 +46,35 @@ export async function seedHistoricalIncident(statement: string) {
 }
 
 /**
- * Seeds a real, live-fetched File entity for search_code to exercise for
- * real — reuses the same live Jung028/tracely-brain repo the GitHub client
- * tests already call (module 02's live-by-default convention still applies
- * to GitHub/Brain calls; only the Anthropic client is mocked in this
- * module — see design doc Testing section). Returns the entity's `name`
- * (file path) so scenario tests can script a matching search_code call.
+ * Seeds a fixture File entity for search_code to exercise for real —
+ * hermetic (no live GitHub API calls). Earlier this made three live calls
+ * (getRepo/getTreeRecursive/getFileContent) purely to obtain a real blob
+ * sha, but none of the scenario tests that use this fixture ever assert on
+ * actual file content: they only need search_code's tool call to complete
+ * without throwing so the scripted investigation can proceed. search_code
+ * (src/agent/tools.ts) already has a documented graceful-failure branch for
+ * when getFileContent doesn't return `ok: true` — it pushes a
+ * "--- {path} --- (read failed: ...)" string into its results instead of
+ * throwing. So a fixture sha that doesn't correspond to a real GitHub blob
+ * is sufficient here: search_code's real getFileContent call will run
+ * against it and hit that graceful-failure path (either `not_connected` if
+ * GITHUB_TOKEN is unset, or `query_failed`/404 if a token is present),
+ * which is expected and fine. The point of exercising search_code in these
+ * scenarios is to prove the tool-call path executes for real (parses
+ * sourceRef, extracts sha, calls getFileContent, handles whatever comes
+ * back) — not to prove specific file content is retrievable, which is
+ * already covered by tests/integrations/github/client.test.ts's own
+ * getFileContent tests. Returns the entity's `name` (file path) so scenario
+ * tests can script a matching search_code call.
  */
 export async function seedRealCodeFileEntity() {
-  const repoResult = await getRepo("Jung028", "tracely-brain");
-  if (!("ok" in repoResult) || !repoResult.ok) {
-    throw new Error("live getRepo failed while seeding a code file fixture");
-  }
-  const repoData = repoResult.data as { default_branch: string };
-
-  const treeResult = await getTreeRecursive(
-    "Jung028",
-    "tracely-brain",
-    repoData.default_branch,
-  );
-  if (!("ok" in treeResult) || !treeResult.ok) {
-    throw new Error("live getTreeRecursive failed while seeding a code file fixture");
-  }
-
-  const packageJson = treeResult.data.find((e) => e.path === "package.json");
-  if (!packageJson) throw new Error("package.json not found in live tree");
-
-  // Sanity-check content is actually fetchable before the test relies on
-  // it (fails fast with a clear message rather than a confusing assertion
-  // failure deep in a scenario test).
-  const content = await getFileContent("Jung028", "tracely-brain", packageJson.sha);
-  if (!("ok" in content) || !content.ok) {
-    throw new Error("live getFileContent failed while seeding a code file fixture");
-  }
-
   await upsertEntity({
     domain: "Code",
     entityType: "File",
     name: "package.json",
     sourceSystem: "github",
     sourceRef: "github:Jung028/tracely-brain:package.json",
-    attributes: { sha: packageJson.sha },
+    attributes: { sha: "0000000000000000000000000000000000000000" },
   });
 
   return { path: "package.json" };

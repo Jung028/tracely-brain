@@ -9,7 +9,7 @@ import { z } from "zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type { BetaRunnableTool } from "@anthropic-ai/sdk/lib/tools/BetaRunnableTool";
 import { Domain, findEntities, RelationshipType, traverse } from "../brain";
-import { getFileContent } from "../integrations/github/client";
+import { getFileContent } from "../integrations/github";
 import {
   addContradictingEvidence,
   addSupportingEvidence,
