@@ -5,7 +5,11 @@
 // triggered against the live API (insufficient permissions, network
 // unavailability).
 import { afterEach, describe, expect, test } from "bun:test";
-import { getRepo, getTreeRecursive } from "../../../src/integrations/github/client";
+import {
+  getFileContent,
+  getRepo,
+  getTreeRecursive,
+} from "../../../src/integrations/github/client";
 import type { GitHubTreeEntry } from "../../../src/integrations/github/types";
 
 // GITHUB_TOKEN is loaded from .env.test by Bun before this file runs. Save
@@ -189,6 +193,78 @@ describe("getTreeRecursive", () => {
       )) as unknown as typeof fetch;
 
     const result = await getTreeRecursive("Jung028", "tracely-brain", "main", {
+      fetchImpl,
+    });
+
+    expect(result).toMatchObject({ status: "query_failed" });
+  });
+});
+
+describe("getFileContent", () => {
+  test("happy path: live blob fetch decodes base64 content for a known file", async () => {
+    const repoResult = await getRepo("Jung028", "tracely-brain");
+    expect("ok" in repoResult && repoResult.ok).toBe(true);
+    if (!("ok" in repoResult) || !repoResult.ok) throw new Error("unreachable");
+    const repoData = repoResult.data as { default_branch: string };
+
+    const treeResult = await getTreeRecursive(
+      "Jung028",
+      "tracely-brain",
+      repoData.default_branch,
+    );
+    expect("ok" in treeResult && treeResult.ok).toBe(true);
+    if (!("ok" in treeResult) || !treeResult.ok) throw new Error("unreachable");
+
+    const packageJson = treeResult.data.find((e) => e.path === "package.json");
+    if (!packageJson) throw new Error("package.json not found in tree");
+
+    const result = await getFileContent("Jung028", "tracely-brain", packageJson.sha);
+
+    expect("ok" in result && result.ok).toBe(true);
+    if (!("ok" in result) || !result.ok) throw new Error("unreachable");
+    expect(result.data.content).toContain("tracely-brain");
+    expect(result.data.sha).toBe(packageJson.sha);
+  });
+
+  test("not connected: returns status not_connected with no network call when GITHUB_TOKEN is unset", async () => {
+    delete process.env.GITHUB_TOKEN;
+
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      throw new Error("fetchImpl should never be called when not connected");
+    }) as unknown as typeof fetch;
+
+    const result = await getFileContent("Jung028", "tracely-brain", "deadbeef", {
+      fetchImpl,
+    });
+
+    expect(result).toEqual({ status: "not_connected" });
+    expect(called).toBe(false);
+  });
+
+  test("malformed response: injected 200 body with non-string content -> query_failed", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ sha: "deadbeef", encoding: "base64" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+
+    const result = await getFileContent("Jung028", "tracely-brain", "deadbeef", {
+      fetchImpl,
+    });
+
+    expect(result).toMatchObject({ status: "query_failed" });
+  });
+
+  test("unsupported encoding: injected 200 body with a non-base64 encoding -> query_failed, not silently mis-decoded", async () => {
+    const fetchImpl = (async () =>
+      new Response(
+        JSON.stringify({ sha: "deadbeef", content: "plain text", encoding: "utf-8" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+
+    const result = await getFileContent("Jung028", "tracely-brain", "deadbeef", {
       fetchImpl,
     });
 
