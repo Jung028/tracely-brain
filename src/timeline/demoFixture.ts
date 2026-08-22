@@ -29,7 +29,14 @@ export const demoToolCalls: ToolCallRecord[] = [
     concurrencyGroup: "batch-1",
     hypothesisId: "H1",
     supports: "supporting",
-    meaning: "H1 — scheduler-related workflow blockage",
+    // Deliberately does NOT repeat "H1 — " here: TimelineView's
+    // formatHypothesisLine() supplies the hypothesis id once, from
+    // hypothesisId, so this reads as "Supports: H1 — scheduler-related
+    // workflow blockage" — matching specs/04-evidence-timeline.md's
+    // literal example character-for-character (see review fix: an earlier
+    // version had this field lead with "H1 — " too, which duplicated the
+    // id in the rendered line).
+    meaning: "scheduler-related workflow blockage",
   },
   // Second sequential step, later in the investigation: contradicting
   // evidence against a downstream-consumer hypothesis, to show a

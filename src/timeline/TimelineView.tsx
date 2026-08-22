@@ -43,11 +43,36 @@ function formatValue(value: unknown): string {
   }
 }
 
-function HypothesisLinkage({ step }: { step: TimelineStep }) {
+// Carries the supporting/contradicting direction in the label word itself
+// (rather than a parenthetical) so the formatted line can read exactly
+// like specs/04-evidence-timeline.md's literal example
+// ("Supports: H1 — scheduler-related workflow blockage") for a supporting
+// step, with no duplicated hypothesis id and no extra qualifier the spec's
+// example doesn't show. Exported (and kept as a small pure function) so it
+// can be unit-tested directly without rendering the component — see
+// tests/timeline/TimelineView.test.ts.
+export function hypothesisLinkLabel(supports: TimelineStep["supports"]): "Supports" | "Refutes" {
+  return supports === "contradicting" ? "Refutes" : "Supports";
+}
+
+export function formatHypothesisLine(
+  step: Pick<TimelineStep, "hypothesisId" | "supports" | "meaning">,
+): string {
   if (step.hypothesisId === null) {
     // NFR-18 / spec test case: exploratory steps must render an explicit,
     // visible "not linked" state — never a blank or omitted line.
-    return <div className="timeline-step__hypothesis timeline-step__exploratory">Exploratory — not linked to a hypothesis</div>;
+    return "Exploratory — not linked to a hypothesis";
+  }
+  return `${hypothesisLinkLabel(step.supports)}: ${step.hypothesisId} — ${step.meaning}`;
+}
+
+function HypothesisLinkage({ step }: { step: TimelineStep }) {
+  if (step.hypothesisId === null) {
+    return (
+      <div className="timeline-step__hypothesis timeline-step__exploratory">
+        {formatHypothesisLine(step)}
+      </div>
+    );
   }
 
   const supportsClass =
@@ -55,11 +80,7 @@ function HypothesisLinkage({ step }: { step: TimelineStep }) {
       ? "timeline-step__hypothesis--contradicting"
       : "timeline-step__hypothesis--supporting";
 
-  return (
-    <div className={`timeline-step__hypothesis ${supportsClass}`}>
-      <span className="label">Supports:</span> {step.hypothesisId} ({step.supports ?? "unknown"}) — {step.meaning}
-    </div>
-  );
+  return <div className={`timeline-step__hypothesis ${supportsClass}`}>{formatHypothesisLine(step)}</div>;
 }
 
 function StepRow({ step }: { step: TimelineStep }) {
