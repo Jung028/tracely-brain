@@ -215,3 +215,54 @@ export async function getTreeRecursive(
 
   return { ok: true, data: entries };
 }
+
+/**
+ * GET /repos/{owner}/{repo}/git/blobs/{sha}
+ *
+ * Returns decoded UTF-8 text content for a blob. GitHub's blob API always
+ * returns `encoding: "base64"` for the git blobs endpoint in practice, but
+ * this is validated rather than assumed — an unexpected encoding value
+ * resolves to `query_failed` instead of silently mis-decoding (matches the
+ * malformed-tree-response precedent in getTreeRecursive above).
+ */
+export async function getFileContent(
+  owner: string,
+  repo: string,
+  sha: string,
+  opts?: GitHubFetchOptions,
+): Promise<{ ok: true; data: { content: string; sha: string } } | ConnectionFailure> {
+  const result = await fetchGitHubJson(
+    `${GITHUB_API_BASE}/repos/${owner}/${repo}/git/blobs/${encodeURIComponent(sha)}`,
+    opts,
+  );
+
+  if (!("ok" in result)) {
+    return result;
+  }
+
+  const rawData = result.data as
+    | { content?: unknown; encoding?: unknown; sha?: unknown }
+    | null;
+
+  if (typeof rawData?.content !== "string") {
+    return {
+      status: "query_failed",
+      detail: "malformed blob response: missing content string",
+    };
+  }
+
+  if (rawData.encoding !== "base64") {
+    return {
+      status: "query_failed",
+      detail: `unsupported blob encoding: ${JSON.stringify(rawData.encoding)}`,
+    };
+  }
+
+  return {
+    ok: true,
+    data: {
+      content: Buffer.from(rawData.content, "base64").toString("utf-8"),
+      sha: typeof rawData.sha === "string" ? rawData.sha : sha,
+    },
+  };
+}

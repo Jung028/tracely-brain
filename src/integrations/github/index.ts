@@ -6,4 +6,5 @@
 // `classifyGitHubResponse`) are implementation details of the sync and are
 // deliberately not re-exported here — see the module plan's Task 3.
 export { syncGitHubRepository } from "./sync";
+export { getFileContent } from "./client";
 export type { ConnectionFailure, SyncResult } from "./types";
