@@ -4,8 +4,9 @@ Companion to [`HOW-IT-WORKS.md`](./HOW-IT-WORKS.md) and
 [`SEQUENCE-DIAGRAMS.md`](./SEQUENCE-DIAGRAMS.md). Two views of the same data: the persisted
 Postgres schema (ERD), and the TypeScript domain types built on top of it (class diagram).
 
-Source of truth for the ERD: `migrations/0001_init.sql`. Source of truth for the class diagram:
-`src/brain/types.ts` and `src/agent/types.ts`.
+Source of truth for the ERD: `migrations/0001_init.sql`. Source of truth for the class diagrams:
+`src/brain/types.ts` and `src/agent/types.ts` (section 2), and, for module 04's own display data
+model, `src/timeline/types.ts` (section 3).
 
 ---
 
@@ -187,21 +188,37 @@ classDiagram
         +number confidence
     }
 
+    class ToolCallRecord {
+        +string id
+        +string toolName
+        +unknown input
+        +string why
+        +unknown result
+        +Date timestamp
+        +string concurrencyGroup
+        +string|null hypothesisId
+        +"supporting"|"contradicting"|null supports
+        +string|null meaning
+    }
+
     class InvestigationState {
         +Hypothesis[] hypotheses
+        +ToolCallRecord[] toolCalls
     }
 
     class InvestigationResult {
         <<discriminated union>>
-        CONFIRMED: hypothesis, rca, evidenceTrail
-        INSUFFICIENT_EVIDENCE: hypothesesConsidered, reason
+        CONFIRMED: hypothesis, rca, evidenceTrail, toolCalls
+        INSUFFICIENT_EVIDENCE: hypothesesConsidered, reason, toolCalls
     }
 
     Hypothesis "1" --> "1" HypothesisStatus : status
     Hypothesis "1" *-- "0..*" Evidence : supportingEvidence
     Hypothesis "1" *-- "0..*" Evidence : contradictingEvidence
     InvestigationState "1" *-- "0..*" Hypothesis : hypotheses
+    InvestigationState "1" *-- "0..*" ToolCallRecord : toolCalls
     InvestigationResult ..> Hypothesis : references
+    InvestigationResult ..> ToolCallRecord : references
 ```
 
 ### Reading the two halves together
@@ -209,12 +226,75 @@ classDiagram
 - `Evidence.toolSource` is a free string (e.g. `"query_brain"`, `"search_code"`) naming which of
   the six agent tools produced it — there's no formal enum tying it back to the tool definitions
   in `tools.ts`.
-- `Evidence.raw` is typed `unknown` and, per the current `update_hypothesis` handler, always
-  `null` — the type supports carrying the underlying tool result for inspection, but nothing wires
-  a real value into it yet (see the "Known gaps" section of `HOW-IT-WORKS.md`).
+- `Evidence.raw` is typed `unknown`. As of module 04's Task 1 retrofit it is **no longer always
+  `null`**: `update_hypothesis` accepts an optional `stepId` param, and every evidence tool
+  (`query_brain`, `search_code`, `query_database`, `search_logs`) now prefixes its return value
+  with `` STEP_ID: <id>\n `` (the `id` of the `ToolCallRecord` that call just created) ahead of its
+  normal output, so the model can learn a step's id and cite it later. When `update_hypothesis` is
+  called with a `stepId` that matches a `ToolCallRecord.id` already in `InvestigationState.toolCalls`,
+  that record is updated in place (`hypothesisId`, `supports`, `meaning` set) and the constructed
+  `Evidence.raw` is set to that record's real `result` value — not `null`. If `stepId` is omitted,
+  or doesn't match any recorded call's id, `raw` still comes back `null` (see `HOW-IT-WORKS.md`'s
+  "Evidence tool parameters, STEP_ID citation, and concurrencyGroup" subsection for the exact
+  mechanism).
+- `ToolCallRecord.hypothesisId` is a free string (a `Hypothesis.id`) once `update_hypothesis` cites
+  that step — there's no formal UML association back to `Hypothesis` in the diagram above, the same
+  informal string-based link as `Evidence.toolSource`'s tool name. It's `null` for exploratory
+  steps no `update_hypothesis` call has cited yet.
+- The `InvestigationState` box above shows only its domain-relevant fields (`hypotheses`,
+  `toolCalls`). The real interface (`src/agent/tools.ts`, not `types.ts`) also carries
+  `batchCounter: number` and `batchOpen: boolean` — internal bookkeeping used only to derive
+  `ToolCallRecord.concurrencyGroup`, not part of the evidence data model itself; see
+  `HOW-IT-WORKS.md` for how those two fields work.
 - `Hypothesis`/`Evidence`/`InvestigationState` are **not** persisted anywhere — no
   `investigations` or `hypotheses` table exists in `migrations/`. An investigation's reasoning
-  trail currently disappears when the process holding `InvestigationState` exits.
+  trail currently disappears when the process holding `InvestigationState` exits. The same is true
+  of `ToolCallRecord` and module 04's `TimelineStep`/`InvestigationTimeline` (section 3) — nothing
+  in this module adds persistence either.
 - The only durable link between the two halves is `Evidence.toolSource` naming `query_brain` /
   `search_code`, which internally read `Entity`/`Relationship` rows — but that link is by
   convention (a string), not enforced by any type.
+
+---
+
+## 3. Class Diagram — Module 04 Timeline Types
+
+Module 04's own display data model (`src/timeline/types.ts`) — a pure rendering-shaped view over
+`ToolCallRecord` (section 2), not persisted, not part of `src/agent/`.
+
+```mermaid
+classDiagram
+    class TimelineStep {
+        +string id
+        +string toolName
+        +unknown query
+        +string why
+        +unknown result
+        +string|null meaning
+        +string|null hypothesisId
+        +"supporting"|"contradicting"|null supports
+        +Date timestamp
+        +string concurrencyGroup
+    }
+
+    class InvestigationTimeline {
+        +TimelineStep[] steps
+    }
+
+    InvestigationTimeline "1" *-- "0..*" TimelineStep : steps
+```
+
+### The `buildTimeline` transform
+
+`buildTimeline(toolCalls: readonly ToolCallRecord[]): InvestigationTimeline`
+(`src/timeline/build.ts`) is a pure function — no I/O, no mutation of the input array, no
+dependency on `src/agent/` internals beyond the `ToolCallRecord` type itself. It:
+
+1. Maps each `ToolCallRecord` to a `TimelineStep` 1:1. Every field carries through unchanged
+   except `ToolCallRecord.input`, which becomes `TimelineStep.query` — the only field rename in the
+   transform.
+2. Sorts the resulting steps ascending by `timestamp.getTime()`.
+
+`TimelineStep` exists as its own type (rather than reusing `ToolCallRecord` directly) purely so
+the UI layer (`src/timeline/TimelineView.tsx`) can consume a name (`query`) that matches how it's
+rendered, without coupling the display model to `src/agent/`'s internal field name (`input`).
