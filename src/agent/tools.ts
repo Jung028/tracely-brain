@@ -20,54 +20,89 @@ import type { Evidence, Hypothesis, ToolCallRecord } from "./types";
 export interface InvestigationState {
   hypotheses: Hypothesis[];
   toolCalls: ToolCallRecord[];
-  // Approximates "which model turn/batch a call belongs to" for
-  // concurrencyGroup below. The Tool Runner's `run(input, context)` handler
-  // (see node_modules/@anthropic-ai/sdk/lib/tools/BetaRunnableTool.d.ts)
-  // only exposes `toolUse` (per-call id) and an abort `signal` — no shared
-  // per-turn identifier — so this counter is a call-order stand-in, not a
-  // true turn boundary. See recordToolCall below for the actual grouping
-  // logic and its known limitation.
+  // Groups same-turn parallel evidence-tool calls under one concurrencyGroup
+  // value. The Tool Runner's `run(input, context)` handler (see
+  // node_modules/@anthropic-ai/sdk/lib/tools/BetaRunnableTool.d.ts) exposes
+  // no shared per-turn identifier — only `toolUse` (per-call id) and an
+  // abort `signal` — so there's no real turn-boundary signal to read.
+  // Instead this exploits how BetaToolRunner actually dispatches same-turn
+  // tool_use blocks (see node_modules/@anthropic-ai/sdk/src/lib/tools/
+  // BetaToolRunner.ts ~line 493: `Promise.all(toolUseBlocks.map(async
+  // (toolUse) => { ... }))`): every call's `run()` body starts executing
+  // synchronously, back to back, before any of them can complete — so a
+  // "batch is open" flag that's only cleared on the next microtask tick
+  // (via queueMicrotask) reliably spans exactly one synchronous dispatch
+  // burst, i.e. one turn's worth of same-turn calls. See beginToolCall
+  // below for the actual grouping logic.
   batchCounter: number;
+  batchOpen: boolean;
 }
 
 export function createInvestigationState(): InvestigationState {
-  return { hypotheses: [], toolCalls: [], batchCounter: 0 };
+  return { hypotheses: [], toolCalls: [], batchCounter: 0, batchOpen: false };
 }
 
-// Pushes a ToolCallRecord for one of the four evidence tools and returns its
-// id. `result` is stored as the real computed value (not a string) so
-// update_hypothesis can later attach it verbatim to Evidence.raw — see
-// design note in tools.ts header and docs/DATA-MODEL.md "Reading the two
-// halves together".
+interface ToolCallHandle {
+  readonly id: string;
+  readonly concurrencyGroup: string;
+}
+
+// Must be called synchronously, at the very top of an evidence tool's
+// `run()` handler, BEFORE any `await` in that handler. See the comment on
+// InvestigationState.batchOpen for why the timing matters: BetaToolRunner
+// dispatches every same-turn tool_use block's run() synchronously via
+// `Promise.all(toolUseBlocks.map(...))`, back to back, before any of them
+// can suspend past their first await. Deciding the batch/id here — in that
+// synchronous window — is what makes concurrencyGroup track real same-turn
+// concurrency; deciding it after an internal await (e.g. after `await
+// findEntities(...)`) would instead group calls by unrelated completion
+// timing, which is exactly the bug this function fixes.
 //
-// concurrencyGroup: see the comment on InvestigationState.batchCounter — no
-// real per-turn signal is available from the SDK today, so each evidence
-// call gets its own incrementing "batch-N" group. This deliberately does
-// NOT detect true same-turn parallelism (e.g. two tool_use blocks in one
-// assistant turn, run via Promise.all by BetaToolRunner) — it only records
-// call order. A future session should replace this if/when the SDK exposes
-// a real turn-boundary identifier in BetaToolRunContext.
-function recordToolCall(
+// The first call in a synchronous dispatch burst finds `batchOpen ===
+// false`, increments `batchCounter`, opens the batch, and schedules a
+// microtask to close it again — that scheduling happens only on this
+// transition, not on every call, so it doesn't re-close the batch early
+// relative to later synchronous calls in the same burst. Every subsequent
+// call that runs before that microtask fires (i.e. every other same-turn
+// call) finds `batchOpen === true` and reuses the current `batchCounter`
+// value. A call from a genuinely later turn runs after that microtask has
+// fired, finds `batchOpen === false` again, and starts a new group.
+function beginToolCall(state: InvestigationState): ToolCallHandle {
+  if (!state.batchOpen) {
+    state.batchCounter += 1;
+    state.batchOpen = true;
+    queueMicrotask(() => {
+      state.batchOpen = false;
+    });
+  }
+  return { id: crypto.randomUUID(), concurrencyGroup: `batch-${state.batchCounter}` };
+}
+
+// Pushes the ToolCallRecord for one of the four evidence tools, using the
+// id/concurrencyGroup a prior `beginToolCall` call (made synchronously,
+// before this tool's internal awaits) already decided. `result` is stored
+// as the real computed value (not a string) so update_hypothesis can later
+// attach it verbatim to Evidence.raw — see design note in tools.ts header
+// and docs/DATA-MODEL.md "Reading the two halves together".
+function finishToolCall(
   state: InvestigationState,
+  handle: ToolCallHandle,
   toolName: string,
   input: { reason: string } & Record<string, unknown>,
   result: unknown,
-): string {
-  state.batchCounter += 1;
-  const id = crypto.randomUUID();
+): void {
   state.toolCalls.push({
-    id,
+    id: handle.id,
     toolName,
     input,
     why: input.reason,
     result,
     timestamp: new Date(),
-    concurrencyGroup: `batch-${state.batchCounter}`,
+    concurrencyGroup: handle.concurrencyGroup,
     hypothesisId: null,
     supports: null,
     meaning: null,
   });
-  return id;
 }
 
 // Every evidence tool's return value (the text the model actually sees) is
@@ -121,27 +156,30 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
         ),
     }),
     run: async (input) => {
+      // Must happen before any `await` below — see beginToolCall's comment.
+      const call = beginToolCall(state);
+
       if (input.mode === "search") {
         const entities = await findEntities({
           domain: input.domain,
           entityType: input.entityType,
         });
-        const stepId = recordToolCall(state, "query_brain", input, entities);
-        return withStepId(stepId, JSON.stringify(entities));
+        finishToolCall(state, call, "query_brain", input, entities);
+        return withStepId(call.id, JSON.stringify(entities));
       }
 
       if (!input.startEntityId) {
         const guidance = "traverse mode requires startEntityId — run a search first to find one";
-        const stepId = recordToolCall(state, "query_brain", input, guidance);
-        return withStepId(stepId, guidance);
+        finishToolCall(state, call, "query_brain", input, guidance);
+        return withStepId(call.id, guidance);
       }
       const result = await traverse({
         startEntityId: input.startEntityId,
         relationshipTypes: input.relationshipTypes,
         maxDepth: input.maxDepth,
       });
-      const stepId = recordToolCall(state, "query_brain", input, result);
-      return withStepId(stepId, JSON.stringify(result));
+      finishToolCall(state, call, "query_brain", input, result);
+      return withStepId(call.id, JSON.stringify(result));
     },
   });
 
@@ -159,12 +197,15 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
         ),
     }),
     run: async (input) => {
+      // Must happen before any `await` below — see beginToolCall's comment.
+      const call = beginToolCall(state);
+
       const files = await findEntities({ domain: "Code", entityType: "File" });
       const matches = files.filter((f) => f.name.includes(input.pathContains));
       if (matches.length === 0) {
         const guidance = `no synced files match "${input.pathContains}"`;
-        const stepId = recordToolCall(state, "search_code", input, guidance);
-        return withStepId(stepId, guidance);
+        finishToolCall(state, call, "search_code", input, guidance);
+        return withStepId(call.id, guidance);
       }
 
       const results: string[] = [];
@@ -185,8 +226,8 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
           results.push(`--- ${file.name} --- (read failed: ${JSON.stringify(content)})`);
         }
       }
-      const stepId = recordToolCall(state, "search_code", input, results);
-      return withStepId(stepId, results.join("\n\n"));
+      finishToolCall(state, call, "search_code", input, results);
+      return withStepId(call.id, results.join("\n\n"));
     },
   });
 
@@ -210,9 +251,10 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
         ),
     }),
     run: async (input) => {
+      const call = beginToolCall(state);
       const result = { status: "NOT_IMPLEMENTED", tool: "query_database" };
-      const stepId = recordToolCall(state, "query_database", input, result);
-      return withStepId(stepId, JSON.stringify(result));
+      finishToolCall(state, call, "query_database", input, result);
+      return withStepId(call.id, JSON.stringify(result));
     },
   });
 
@@ -230,9 +272,10 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
         ),
     }),
     run: async (input) => {
+      const call = beginToolCall(state);
       const result = { status: "NOT_IMPLEMENTED", tool: "search_logs" };
-      const stepId = recordToolCall(state, "search_logs", input, result);
-      return withStepId(stepId, JSON.stringify(result));
+      finishToolCall(state, call, "search_logs", input, result);
+      return withStepId(call.id, JSON.stringify(result));
     },
   });
 

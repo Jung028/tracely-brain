@@ -121,3 +121,57 @@ describe("queryDatabase / searchLogs stubs", () => {
     expect(result).toContain("NOT_IMPLEMENTED");
   });
 });
+
+describe("concurrencyGroup batching", () => {
+  test("two evidence-tool calls dispatched together (same synchronous burst) share a concurrencyGroup, and a later call gets a new one", async () => {
+    const state = createInvestigationState();
+    const tools = createTools(state);
+    const queryBrainTool = getTool(tools, "query_brain");
+    const searchCodeTool = getTool(tools, "search_code");
+    const queryDatabaseTool = getTool(tools, "query_database");
+
+    // Both .run() calls are made inside the same array literal, so both
+    // start executing synchronously, back to back, before either can
+    // suspend past its first `await` — the same dispatch pattern
+    // BetaToolRunner uses for same-turn tool_use blocks
+    // (Promise.all(toolUseBlocks.map(...)), see tools.ts's comment on
+    // beginToolCall). This is what should land them in the same batch.
+    const [brainResult, codeResult] = await Promise.all([
+      queryBrainTool.run({
+        mode: "search",
+        domain: "Operational Knowledge",
+        entityType: undefined,
+        maxDepth: 2,
+        reason: "parallel call 1",
+      }),
+      searchCodeTool.run({
+        pathContains: "this-path-should-not-exist-anywhere",
+        reason: "parallel call 2",
+      }),
+    ]);
+
+    const stepIdOf = (result: unknown) => /^STEP_ID: ([^\n]+)\n/.exec(result as string)?.[1];
+    const brainStepId = stepIdOf(brainResult);
+    const codeStepId = stepIdOf(codeResult);
+    expect(brainStepId).toBeTruthy();
+    expect(codeStepId).toBeTruthy();
+
+    const brainRecord = state.toolCalls.find((c) => c.id === brainStepId);
+    const codeRecord = state.toolCalls.find((c) => c.id === codeStepId);
+    expect(brainRecord).toBeDefined();
+    expect(codeRecord).toBeDefined();
+    expect(brainRecord?.concurrencyGroup).toBe(codeRecord?.concurrencyGroup);
+
+    // A call made afterward — only once the parallel pair has fully
+    // resolved — is a genuinely later turn and must land in a different
+    // group, proving this isn't just a single group for the whole test.
+    const dbResult = await queryDatabaseTool.run({
+      query: "SELECT 1",
+      reason: "sequential call after the parallel pair",
+    });
+    const dbStepId = stepIdOf(dbResult);
+    const dbRecord = state.toolCalls.find((c) => c.id === dbStepId);
+    expect(dbRecord).toBeDefined();
+    expect(dbRecord?.concurrencyGroup).not.toBe(brainRecord?.concurrencyGroup);
+  });
+});
