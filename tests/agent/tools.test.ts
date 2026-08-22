@@ -74,9 +74,15 @@ describe("queryBrain tool", () => {
       domain: "Operational Knowledge",
       entityType: undefined,
       maxDepth: 2,
+      reason: "checking for historical incidents in this domain",
     });
 
-    expect(() => JSON.parse(result as string)).not.toThrow();
+    // Result is prefixed `STEP_ID: <id>\n` (see tools.ts's withStepId) so
+    // update_hypothesis can later cite this exact call — strip that line
+    // before parsing the JSON body it precedes.
+    expect(result as string).toMatch(/^STEP_ID: [^\n]+\n/);
+    const jsonBody = (result as string).replace(/^STEP_ID: [^\n]+\n/, "");
+    expect(() => JSON.parse(jsonBody)).not.toThrow();
   });
 
   test("traverse mode without startEntityId returns a guidance string instead of throwing", async () => {
@@ -84,7 +90,11 @@ describe("queryBrain tool", () => {
     const tools = createTools(state);
     const tool = getTool(tools, "query_brain");
 
-    const result = await tool.run({ mode: "traverse", maxDepth: 2 });
+    const result = await tool.run({
+      mode: "traverse",
+      maxDepth: 2,
+      reason: "walking relationships from a known entity",
+    });
 
     expect(result).toContain("requires startEntityId");
   });
@@ -96,7 +106,7 @@ describe("queryDatabase / searchLogs stubs", () => {
     const tools = createTools(state);
     const tool = getTool(tools, "query_database");
 
-    const result = await tool.run({ query: "SELECT 1" });
+    const result = await tool.run({ query: "SELECT 1", reason: "checking a suspicious row count" });
 
     expect(result).toContain("NOT_IMPLEMENTED");
   });
@@ -106,7 +116,7 @@ describe("queryDatabase / searchLogs stubs", () => {
     const tools = createTools(state);
     const tool = getTool(tools, "search_logs");
 
-    const result = await tool.run({ query: "error" });
+    const result = await tool.run({ query: "error", reason: "looking for related error logs" });
 
     expect(result).toContain("NOT_IMPLEMENTED");
   });

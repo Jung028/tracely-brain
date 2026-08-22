@@ -53,6 +53,7 @@ export async function investigate(
       hypothesis: confirmed,
       rca: confirmed.statement,
       evidenceTrail: [...confirmed.supportingEvidence],
+      toolCalls: state.toolCalls,
     };
   }
 
@@ -63,5 +64,6 @@ export async function investigate(
       state.hypotheses.length === 0
         ? "no hypothesis was proposed"
         : "no hypothesis reached the confirmation threshold",
+    toolCalls: state.toolCalls,
   };
 }

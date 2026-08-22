@@ -15,14 +15,69 @@ import {
   addSupportingEvidence,
   proposeHypothesis as proposeHypothesisFn,
 } from "./hypotheses";
-import type { Evidence, Hypothesis } from "./types";
+import type { Evidence, Hypothesis, ToolCallRecord } from "./types";
 
 export interface InvestigationState {
   hypotheses: Hypothesis[];
+  toolCalls: ToolCallRecord[];
+  // Approximates "which model turn/batch a call belongs to" for
+  // concurrencyGroup below. The Tool Runner's `run(input, context)` handler
+  // (see node_modules/@anthropic-ai/sdk/lib/tools/BetaRunnableTool.d.ts)
+  // only exposes `toolUse` (per-call id) and an abort `signal` — no shared
+  // per-turn identifier — so this counter is a call-order stand-in, not a
+  // true turn boundary. See recordToolCall below for the actual grouping
+  // logic and its known limitation.
+  batchCounter: number;
 }
 
 export function createInvestigationState(): InvestigationState {
-  return { hypotheses: [] };
+  return { hypotheses: [], toolCalls: [], batchCounter: 0 };
+}
+
+// Pushes a ToolCallRecord for one of the four evidence tools and returns its
+// id. `result` is stored as the real computed value (not a string) so
+// update_hypothesis can later attach it verbatim to Evidence.raw — see
+// design note in tools.ts header and docs/DATA-MODEL.md "Reading the two
+// halves together".
+//
+// concurrencyGroup: see the comment on InvestigationState.batchCounter — no
+// real per-turn signal is available from the SDK today, so each evidence
+// call gets its own incrementing "batch-N" group. This deliberately does
+// NOT detect true same-turn parallelism (e.g. two tool_use blocks in one
+// assistant turn, run via Promise.all by BetaToolRunner) — it only records
+// call order. A future session should replace this if/when the SDK exposes
+// a real turn-boundary identifier in BetaToolRunContext.
+function recordToolCall(
+  state: InvestigationState,
+  toolName: string,
+  input: { reason: string } & Record<string, unknown>,
+  result: unknown,
+): string {
+  state.batchCounter += 1;
+  const id = crypto.randomUUID();
+  state.toolCalls.push({
+    id,
+    toolName,
+    input,
+    why: input.reason,
+    result,
+    timestamp: new Date(),
+    concurrencyGroup: `batch-${state.batchCounter}`,
+    hypothesisId: null,
+    supports: null,
+    meaning: null,
+  });
+  return id;
+}
+
+// Every evidence tool's return value (the text the model actually sees) is
+// prefixed `STEP_ID: <id>\n` ahead of its normal content, so the model can
+// parse the id back out and cite it in a later update_hypothesis call's
+// optional `stepId` param. This is the one place that convention is
+// defined — anything parsing a tool result for its step id (this codebase
+// or a later module) must match this exact format.
+function withStepId(id: string, body: string): string {
+  return `STEP_ID: ${id}\n${body}`;
 }
 
 function findHypothesis(
@@ -59,6 +114,11 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       startEntityId: z.string().optional().describe("Entity id to traverse from, traverse mode only"),
       relationshipTypes: z.array(z.enum(RelationshipType)).optional(),
       maxDepth: z.number().int().min(1).max(5).default(2),
+      reason: z
+        .string()
+        .describe(
+          "Why you're making this call right now, in relation to the current investigation or hypothesis.",
+        ),
     }),
     run: async (input) => {
       if (input.mode === "search") {
@@ -66,18 +126,22 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
           domain: input.domain,
           entityType: input.entityType,
         });
-        return JSON.stringify(entities);
+        const stepId = recordToolCall(state, "query_brain", input, entities);
+        return withStepId(stepId, JSON.stringify(entities));
       }
 
       if (!input.startEntityId) {
-        return "traverse mode requires startEntityId — run a search first to find one";
+        const guidance = "traverse mode requires startEntityId — run a search first to find one";
+        const stepId = recordToolCall(state, "query_brain", input, guidance);
+        return withStepId(stepId, guidance);
       }
       const result = await traverse({
         startEntityId: input.startEntityId,
         relationshipTypes: input.relationshipTypes,
         maxDepth: input.maxDepth,
       });
-      return JSON.stringify(result);
+      const stepId = recordToolCall(state, "query_brain", input, result);
+      return withStepId(stepId, JSON.stringify(result));
     },
   });
 
@@ -88,12 +152,19 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       "content. Use this to inspect actual source code relevant to a hypothesis.",
     inputSchema: z.object({
       pathContains: z.string().describe("Substring to match against file paths"),
+      reason: z
+        .string()
+        .describe(
+          "Why you're making this call right now, in relation to the current investigation or hypothesis.",
+        ),
     }),
     run: async (input) => {
       const files = await findEntities({ domain: "Code", entityType: "File" });
       const matches = files.filter((f) => f.name.includes(input.pathContains));
       if (matches.length === 0) {
-        return `no synced files match "${input.pathContains}"`;
+        const guidance = `no synced files match "${input.pathContains}"`;
+        const stepId = recordToolCall(state, "search_code", input, guidance);
+        return withStepId(stepId, guidance);
       }
 
       const results: string[] = [];
@@ -114,7 +185,8 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
           results.push(`--- ${file.name} --- (read failed: ${JSON.stringify(content)})`);
         }
       }
-      return results.join("\n\n");
+      const stepId = recordToolCall(state, "search_code", input, results);
+      return withStepId(stepId, results.join("\n\n"));
     },
   });
 
@@ -129,9 +201,18 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       "Execute a read-only PostgreSQL query. NOT YET IMPLEMENTED — always returns a " +
       "NOT_IMPLEMENTED marker; treat this the same as an unavailable source, not as an " +
       "empty result.",
-    inputSchema: z.object({ query: z.string() }),
-    run: async () => {
-      return JSON.stringify({ status: "NOT_IMPLEMENTED", tool: "query_database" });
+    inputSchema: z.object({
+      query: z.string(),
+      reason: z
+        .string()
+        .describe(
+          "Why you're making this call right now, in relation to the current investigation or hypothesis.",
+        ),
+    }),
+    run: async (input) => {
+      const result = { status: "NOT_IMPLEMENTED", tool: "query_database" };
+      const stepId = recordToolCall(state, "query_database", input, result);
+      return withStepId(stepId, JSON.stringify(result));
     },
   });
 
@@ -140,9 +221,18 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
     description:
       "Search Datadog logs. NOT YET IMPLEMENTED — always returns a NOT_IMPLEMENTED marker; " +
       "treat this the same as an unavailable source, not as an empty result.",
-    inputSchema: z.object({ query: z.string() }),
-    run: async () => {
-      return JSON.stringify({ status: "NOT_IMPLEMENTED", tool: "search_logs" });
+    inputSchema: z.object({
+      query: z.string(),
+      reason: z
+        .string()
+        .describe(
+          "Why you're making this call right now, in relation to the current investigation or hypothesis.",
+        ),
+    }),
+    run: async (input) => {
+      const result = { status: "NOT_IMPLEMENTED", tool: "search_logs" };
+      const stepId = recordToolCall(state, "search_logs", input, result);
+      return withStepId(stepId, JSON.stringify(result));
     },
   });
 
@@ -167,12 +257,20 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       "Attach a piece of evidence to an existing hypothesis, as either supporting or " +
       "contradicting. The hypothesis's status and confidence are recomputed by our own " +
       "code from accumulated evidence — you do not set status or confidence directly, and " +
-      "you cannot mark evidence as 'decisive' yourself.",
+      "you cannot mark evidence as 'decisive' yourself. Pass stepId to cite the exact prior " +
+      "query_brain / search_code / query_database / search_logs call this evidence came from " +
+      "— this attaches that call's real result to the evidence record instead of leaving it " +
+      "empty. Each of those tools' results starts with a line like 'STEP_ID: <id>'; use that " +
+      "id here.",
     inputSchema: z.object({
       hypothesisId: z.string(),
       direction: z.enum(["supporting", "contradicting"]),
       description: z.string(),
       toolSource: z.string().describe("Which tool produced this evidence, e.g. query_brain"),
+      stepId: z
+        .string()
+        .optional()
+        .describe("Id of the prior evidence-tool call this evidence cites, if any"),
     }),
     run: async (input) => {
       const hypothesis = findHypothesis(state, input.hypothesisId);
@@ -180,12 +278,26 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
         return `hypothesis not found: ${input.hypothesisId}`;
       }
 
+      const citedStepIdx = input.stepId
+        ? state.toolCalls.findIndex((call) => call.id === input.stepId)
+        : -1;
+      const citedStep = citedStepIdx === -1 ? undefined : state.toolCalls[citedStepIdx];
+
+      if (citedStep) {
+        state.toolCalls[citedStepIdx] = {
+          ...citedStep,
+          hypothesisId: input.hypothesisId,
+          supports: input.direction,
+          meaning: input.description,
+        };
+      }
+
       const evidence: Evidence = {
         id: crypto.randomUUID(),
         toolSource: input.toolSource,
         description: input.description,
         timestamp: new Date(),
-        raw: null,
+        raw: citedStep ? citedStep.result : null,
       };
 
       const updated =

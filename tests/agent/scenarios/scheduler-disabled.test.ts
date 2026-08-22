@@ -53,6 +53,7 @@ describe("demo scenario: scheduler disabled", () => {
                 startEntityId: task.id,
                 relationshipTypes: ["TRANSITIONS_TO"],
                 maxDepth: 2,
+                reason: "checking whether the scheduler transition is reachable from this task",
               },
             },
           ],
@@ -84,7 +85,10 @@ describe("demo scenario: scheduler disabled", () => {
               type: "tool_use",
               id: "toolu_search_code",
               name: "search_code",
-              input: { pathContains: "package.json" },
+              input: {
+                pathContains: "package.json",
+                reason: "inspecting the scheduler's dependency configuration",
+              },
             },
           ],
         };
