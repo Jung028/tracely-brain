@@ -15,14 +15,104 @@ import {
   addSupportingEvidence,
   proposeHypothesis as proposeHypothesisFn,
 } from "./hypotheses";
-import type { Evidence, Hypothesis } from "./types";
+import type { Evidence, Hypothesis, ToolCallRecord } from "./types";
 
 export interface InvestigationState {
   hypotheses: Hypothesis[];
+  toolCalls: ToolCallRecord[];
+  // Groups same-turn parallel evidence-tool calls under one concurrencyGroup
+  // value. The Tool Runner's `run(input, context)` handler (see
+  // node_modules/@anthropic-ai/sdk/lib/tools/BetaRunnableTool.d.ts) exposes
+  // no shared per-turn identifier — only `toolUse` (per-call id) and an
+  // abort `signal` — so there's no real turn-boundary signal to read.
+  // Instead this exploits how BetaToolRunner actually dispatches same-turn
+  // tool_use blocks (see node_modules/@anthropic-ai/sdk/src/lib/tools/
+  // BetaToolRunner.ts ~line 493: `Promise.all(toolUseBlocks.map(async
+  // (toolUse) => { ... }))`): every call's `run()` body starts executing
+  // synchronously, back to back, before any of them can complete — so a
+  // "batch is open" flag that's only cleared on the next microtask tick
+  // (via queueMicrotask) reliably spans exactly one synchronous dispatch
+  // burst, i.e. one turn's worth of same-turn calls. See beginToolCall
+  // below for the actual grouping logic.
+  batchCounter: number;
+  batchOpen: boolean;
 }
 
 export function createInvestigationState(): InvestigationState {
-  return { hypotheses: [] };
+  return { hypotheses: [], toolCalls: [], batchCounter: 0, batchOpen: false };
+}
+
+interface ToolCallHandle {
+  readonly id: string;
+  readonly concurrencyGroup: string;
+}
+
+// Must be called synchronously, at the very top of an evidence tool's
+// `run()` handler, BEFORE any `await` in that handler. See the comment on
+// InvestigationState.batchOpen for why the timing matters: BetaToolRunner
+// dispatches every same-turn tool_use block's run() synchronously via
+// `Promise.all(toolUseBlocks.map(...))`, back to back, before any of them
+// can suspend past their first await. Deciding the batch/id here — in that
+// synchronous window — is what makes concurrencyGroup track real same-turn
+// concurrency; deciding it after an internal await (e.g. after `await
+// findEntities(...)`) would instead group calls by unrelated completion
+// timing, which is exactly the bug this function fixes.
+//
+// The first call in a synchronous dispatch burst finds `batchOpen ===
+// false`, increments `batchCounter`, opens the batch, and schedules a
+// microtask to close it again — that scheduling happens only on this
+// transition, not on every call, so it doesn't re-close the batch early
+// relative to later synchronous calls in the same burst. Every subsequent
+// call that runs before that microtask fires (i.e. every other same-turn
+// call) finds `batchOpen === true` and reuses the current `batchCounter`
+// value. A call from a genuinely later turn runs after that microtask has
+// fired, finds `batchOpen === false` again, and starts a new group.
+function beginToolCall(state: InvestigationState): ToolCallHandle {
+  if (!state.batchOpen) {
+    state.batchCounter += 1;
+    state.batchOpen = true;
+    queueMicrotask(() => {
+      state.batchOpen = false;
+    });
+  }
+  return { id: crypto.randomUUID(), concurrencyGroup: `batch-${state.batchCounter}` };
+}
+
+// Pushes the ToolCallRecord for one of the four evidence tools, using the
+// id/concurrencyGroup a prior `beginToolCall` call (made synchronously,
+// before this tool's internal awaits) already decided. `result` is stored
+// as the real computed value (not a string) so update_hypothesis can later
+// attach it verbatim to Evidence.raw — see design note in tools.ts header
+// and docs/DATA-MODEL.md "Reading the two halves together".
+function finishToolCall(
+  state: InvestigationState,
+  handle: ToolCallHandle,
+  toolName: string,
+  input: { reason: string } & Record<string, unknown>,
+  result: unknown,
+): void {
+  state.toolCalls.push({
+    id: handle.id,
+    toolName,
+    input,
+    why: input.reason,
+    result,
+    timestamp: new Date(),
+    concurrencyGroup: handle.concurrencyGroup,
+    hypothesisId: null,
+    supports: null,
+    meaning: null,
+  });
+}
+
+// Every evidence tool's return value (the text the model actually sees) is
+// prefixed `STEP_ID: <id>\n` ahead of its normal content, so the model can
+// parse the id back out and cite it in a later update_hypothesis call's
+// optional `stepId` param. This is the one place that convention is
+// defined — anything parsing a tool result for its step id (this codebase
+// or a later module) must match this exact format.
+function withStepId(id: string, body: string): string {
+  return `STEP_ID: ${id}\n${body}`;
 }
 
 function findHypothesis(
@@ -59,25 +149,37 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       startEntityId: z.string().optional().describe("Entity id to traverse from, traverse mode only"),
       relationshipTypes: z.array(z.enum(RelationshipType)).optional(),
       maxDepth: z.number().int().min(1).max(5).default(2),
+      reason: z
+        .string()
+        .describe(
+          "Why you're making this call right now, in relation to the current investigation or hypothesis.",
+        ),
     }),
     run: async (input) => {
+      // Must happen before any `await` below — see beginToolCall's comment.
+      const call = beginToolCall(state);
+
       if (input.mode === "search") {
         const entities = await findEntities({
           domain: input.domain,
           entityType: input.entityType,
         });
-        return JSON.stringify(entities);
+        finishToolCall(state, call, "query_brain", input, entities);
+        return withStepId(call.id, JSON.stringify(entities));
       }
 
       if (!input.startEntityId) {
-        return "traverse mode requires startEntityId — run a search first to find one";
+        const guidance = "traverse mode requires startEntityId — run a search first to find one";
+        finishToolCall(state, call, "query_brain", input, guidance);
+        return withStepId(call.id, guidance);
       }
       const result = await traverse({
         startEntityId: input.startEntityId,
         relationshipTypes: input.relationshipTypes,
         maxDepth: input.maxDepth,
       });
-      return JSON.stringify(result);
+      finishToolCall(state, call, "query_brain", input, result);
+      return withStepId(call.id, JSON.stringify(result));
     },
   });
 
@@ -88,12 +190,22 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       "content. Use this to inspect actual source code relevant to a hypothesis.",
     inputSchema: z.object({
       pathContains: z.string().describe("Substring to match against file paths"),
+      reason: z
+        .string()
+        .describe(
+          "Why you're making this call right now, in relation to the current investigation or hypothesis.",
+        ),
     }),
     run: async (input) => {
+      // Must happen before any `await` below — see beginToolCall's comment.
+      const call = beginToolCall(state);
+
       const files = await findEntities({ domain: "Code", entityType: "File" });
       const matches = files.filter((f) => f.name.includes(input.pathContains));
       if (matches.length === 0) {
-        return `no synced files match "${input.pathContains}"`;
+        const guidance = `no synced files match "${input.pathContains}"`;
+        finishToolCall(state, call, "search_code", input, guidance);
+        return withStepId(call.id, guidance);
       }
 
       const results: string[] = [];
@@ -114,7 +226,8 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
           results.push(`--- ${file.name} --- (read failed: ${JSON.stringify(content)})`);
         }
       }
-      return results.join("\n\n");
+      finishToolCall(state, call, "search_code", input, results);
+      return withStepId(call.id, results.join("\n\n"));
     },
   });
 
@@ -129,9 +242,19 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       "Execute a read-only PostgreSQL query. NOT YET IMPLEMENTED — always returns a " +
       "NOT_IMPLEMENTED marker; treat this the same as an unavailable source, not as an " +
       "empty result.",
-    inputSchema: z.object({ query: z.string() }),
-    run: async () => {
-      return JSON.stringify({ status: "NOT_IMPLEMENTED", tool: "query_database" });
+    inputSchema: z.object({
+      query: z.string(),
+      reason: z
+        .string()
+        .describe(
+          "Why you're making this call right now, in relation to the current investigation or hypothesis.",
+        ),
+    }),
+    run: async (input) => {
+      const call = beginToolCall(state);
+      const result = { status: "NOT_IMPLEMENTED", tool: "query_database" };
+      finishToolCall(state, call, "query_database", input, result);
+      return withStepId(call.id, JSON.stringify(result));
     },
   });
 
@@ -140,9 +263,19 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
     description:
       "Search Datadog logs. NOT YET IMPLEMENTED — always returns a NOT_IMPLEMENTED marker; " +
       "treat this the same as an unavailable source, not as an empty result.",
-    inputSchema: z.object({ query: z.string() }),
-    run: async () => {
-      return JSON.stringify({ status: "NOT_IMPLEMENTED", tool: "search_logs" });
+    inputSchema: z.object({
+      query: z.string(),
+      reason: z
+        .string()
+        .describe(
+          "Why you're making this call right now, in relation to the current investigation or hypothesis.",
+        ),
+    }),
+    run: async (input) => {
+      const call = beginToolCall(state);
+      const result = { status: "NOT_IMPLEMENTED", tool: "search_logs" };
+      finishToolCall(state, call, "search_logs", input, result);
+      return withStepId(call.id, JSON.stringify(result));
     },
   });
 
@@ -167,12 +300,20 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       "Attach a piece of evidence to an existing hypothesis, as either supporting or " +
       "contradicting. The hypothesis's status and confidence are recomputed by our own " +
       "code from accumulated evidence — you do not set status or confidence directly, and " +
-      "you cannot mark evidence as 'decisive' yourself.",
+      "you cannot mark evidence as 'decisive' yourself. Pass stepId to cite the exact prior " +
+      "query_brain / search_code / query_database / search_logs call this evidence came from " +
+      "— this attaches that call's real result to the evidence record instead of leaving it " +
+      "empty. Each of those tools' results starts with a line like 'STEP_ID: <id>'; use that " +
+      "id here.",
     inputSchema: z.object({
       hypothesisId: z.string(),
       direction: z.enum(["supporting", "contradicting"]),
       description: z.string(),
       toolSource: z.string().describe("Which tool produced this evidence, e.g. query_brain"),
+      stepId: z
+        .string()
+        .optional()
+        .describe("Id of the prior evidence-tool call this evidence cites, if any"),
     }),
     run: async (input) => {
       const hypothesis = findHypothesis(state, input.hypothesisId);
@@ -180,12 +321,26 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
         return `hypothesis not found: ${input.hypothesisId}`;
       }
 
+      const citedStepIdx = input.stepId
+        ? state.toolCalls.findIndex((call) => call.id === input.stepId)
+        : -1;
+      const citedStep = citedStepIdx === -1 ? undefined : state.toolCalls[citedStepIdx];
+
+      if (citedStep) {
+        state.toolCalls[citedStepIdx] = {
+          ...citedStep,
+          hypothesisId: input.hypothesisId,
+          supports: input.direction,
+          meaning: input.description,
+        };
+      }
+
       const evidence: Evidence = {
         id: crypto.randomUUID(),
         toolSource: input.toolSource,
         description: input.description,
         timestamp: new Date(),
-        raw: null,
+        raw: citedStep ? citedStep.result : null,
       };
 
       const updated =

@@ -10,5 +10,6 @@ export type {
   Hypothesis,
   HypothesisStatus,
   InvestigationResult,
+  ToolCallRecord,
 } from "./types";
 export { CONFIRMATION_THRESHOLD, REFUTATION_THRESHOLD } from "./hypotheses";

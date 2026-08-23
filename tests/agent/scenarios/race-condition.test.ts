@@ -49,7 +49,11 @@ describe("demo scenario: race condition (FR-20 end-to-end)", () => {
               type: "tool_use",
               id: "toolu_query_brain",
               name: "query_brain",
-              input: { mode: "search", domain: "Runtime" },
+              input: {
+                mode: "search",
+                domain: "Runtime",
+                reason: "checking lock acquisition state for both writers",
+              },
             },
           ],
         };
@@ -104,7 +108,10 @@ describe("demo scenario: race condition (FR-20 end-to-end)", () => {
               type: "tool_use",
               id: "toolu_search_code",
               name: "search_code",
-              input: { pathContains: "package.json" },
+              input: {
+                pathContains: "package.json",
+                reason: "inspecting the writer's retry/ordering logic",
+              },
             },
           ],
         };

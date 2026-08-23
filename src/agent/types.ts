@@ -25,15 +25,35 @@ export interface Hypothesis {
   readonly confidence: number;
 }
 
+// Module 04 (Evidence Timeline) retrofit: records *every* evidence-tool call
+// the model makes — not just the ones later cited by update_hypothesis — so
+// a timeline can render the full investigation, including dead ends. See
+// docs/HOW-IT-WORKS.md "Known gaps" and docs/DATA-MODEL.md "Reading the two
+// halves together" for the gap this closes.
+export interface ToolCallRecord {
+  readonly id: string; // "stepId" — citable by update_hypothesis
+  readonly toolName: string;
+  readonly input: unknown; // what was queried
+  readonly why: string; // model-supplied reason
+  readonly result: unknown; // real tool result
+  readonly timestamp: Date;
+  readonly concurrencyGroup: string; // shared per toolRunner iteration — parallel vs sequential
+  readonly hypothesisId: string | null;
+  readonly supports: "supporting" | "contradicting" | null;
+  readonly meaning: string | null; // set when update_hypothesis cites this step
+}
+
 export type InvestigationResult =
   | {
       outcome: "CONFIRMED";
       hypothesis: Hypothesis;
       rca: string;
       evidenceTrail: Evidence[];
+      toolCalls: readonly ToolCallRecord[];
     }
   | {
       outcome: "INSUFFICIENT_EVIDENCE";
       hypothesesConsidered: Hypothesis[];
       reason: string;
+      toolCalls: readonly ToolCallRecord[];
     };

@@ -39,7 +39,11 @@ describe("demo scenario: historical RCA as candidate, not proof", () => {
               type: "tool_use",
               id: "toolu_query_brain",
               name: "query_brain",
-              input: { mode: "search", domain: "Operational Knowledge" },
+              input: {
+                mode: "search",
+                domain: "Operational Knowledge",
+                reason: "checking for a similar historical incident before proposing a hypothesis",
+              },
             },
           ],
         };
@@ -70,7 +74,10 @@ describe("demo scenario: historical RCA as candidate, not proof", () => {
               type: "tool_use",
               id: "toolu_search_code",
               name: "search_code",
-              input: { pathContains: "package.json" },
+              input: {
+                pathContains: "package.json",
+                reason: "gathering fresh evidence beyond the historical match",
+              },
             },
           ],
         };

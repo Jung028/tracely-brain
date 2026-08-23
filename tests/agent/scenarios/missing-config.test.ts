@@ -48,7 +48,11 @@ describe("demo scenario: missing config", () => {
               type: "tool_use",
               id: "toolu_query_brain",
               name: "query_brain",
-              input: { mode: "search", domain: "Runtime" },
+              input: {
+                mode: "search",
+                domain: "Runtime",
+                reason: "checking whether the required config key exists",
+              },
             },
           ],
         };
@@ -61,7 +65,10 @@ describe("demo scenario: missing config", () => {
               type: "tool_use",
               id: "toolu_search_code",
               name: "search_code",
-              input: { pathContains: "package.json" },
+              input: {
+                pathContains: "package.json",
+                reason: "corroborating the missing config key against the code path that reads it",
+              },
             },
           ],
         };
