@@ -23,7 +23,7 @@ describe("live investigation state (FR-28)", () => {
         const snapshot = getInvestigationState(sessionId);
         expect(snapshot).toBeDefined();
         if (snapshot!.hypotheses.length > 0) sawHypothesisMidRun = true;
-        if (snapshot!.stepNumber > lastStepNumberSeen) sawStepNumberAdvance = true;
+        if (lastStepNumberSeen >= 0 && snapshot!.stepNumber > lastStepNumberSeen) sawStepNumberAdvance = true;
         lastStepNumberSeen = snapshot!.stepNumber;
       }
 

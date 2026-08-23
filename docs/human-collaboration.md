@@ -56,11 +56,15 @@ interface LiveInvestigationState {
   with), the registry no longer has anything useful to add. `undefined` means "stop polling this
   id and use the result you're awaiting instead," not an error you need to handle specially.
 - Every call returns a **fresh, defensive snapshot copy** — `hypotheses` is a new array on every
-  call, not a live reference into the investigation's real internal state. Mutating a returned
-  snapshot has no effect on the running investigation.
-- `stepNumber` increments by exactly 1 each time any tool executes (`query_brain`, `search_code`,
-  `query_database`, `search_logs`, `propose_hypothesis`, or `update_hypothesis`) — a coarse but
-  real, non-fabricated progress indicator (`src/agent/tools.ts`'s `withStep` wrapper).
+  call, not a live reference into the investigation's real internal state. Mutating the returned
+  array or replacing a hypothesis in it has no effect on the running investigation — the array
+  and each `Hypothesis` are copies. Nested `Evidence` objects (each hypothesis's
+  `supportingEvidence`/`contradictingEvidence`) are shared with the live investigation, not
+  deep-copied, and should be treated as read-only by convention.
+- `stepNumber` increments by exactly 1 each time any tool is invoked (including an invocation
+  that ends up throwing) — `query_brain`, `search_code`, `query_database`, `search_logs`,
+  `propose_hypothesis`, or `update_hypothesis` — a coarse but real, non-fabricated progress
+  indicator (`src/agent/tools.ts`'s `withStep` wrapper).
 
 ## Registering a session
 
@@ -80,6 +84,9 @@ investigate(problemDescription, { sessionId: "some-id", ...otherOptions });
   cross-talked mix of both, which is worse than a loud failure.
 - The registry entry is always removed when `investigate()` finishes — success or throw — via a
   `finally` block. There is no persistence beyond the process's lifetime; this is in-memory only.
+  (The one exception: if `registerSession` itself throws — a duplicate `sessionId` — nothing was
+  registered by this call, so there's nothing for `finally` to remove; the incumbent registration
+  under that id is untouched.)
 
 ## FR-27: deferred
 
