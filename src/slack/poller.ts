@@ -56,22 +56,53 @@ export async function pollAndPost(
     }
   }, intervalMs);
 
-  const result = await resultPromise;
-  clearIntervalImpl(timer);
+  try {
+    const result = await resultPromise;
 
-  const timeline = buildTimeline(result.toolCalls);
-  await completeInvestigation(investigationId, { result, timeline });
+    const timeline = buildTimeline(result.toolCalls);
+    await completeInvestigation(investigationId, { result, timeline });
 
-  const link = `${baseUrl}/?investigation=${investigationId}`;
-  const finalText =
-    result.outcome === "CONFIRMED"
-      ? `✅ Root cause confirmed: ${result.rca}\nFull view: ${link}`
-      : `${renderFailureReport(buildFailureReport(result))}\nFull view: ${link}`;
+    const link = `${baseUrl}/?investigation=${investigationId}`;
+    const finalText =
+      result.outcome === "CONFIRMED"
+        ? `✅ Root cause confirmed: ${result.rca}\nFull view: ${link}`
+        : `${renderFailureReport(buildFailureReport(result))}\nFull view: ${link}`;
 
-  const finalResult = await postMessageImpl({
-    channel: slackTarget.channel,
-    thread_ts: slackTarget.thread_ts,
-    text: finalText,
-  });
-  logIfFailed(finalResult, "final result");
+    const finalResult = await postMessageImpl({
+      channel: slackTarget.channel,
+      thread_ts: slackTarget.thread_ts,
+      text: finalText,
+    });
+    logIfFailed(finalResult, "final result");
+  } catch (err) {
+    // resultPromise (ultimately investigate()) rejected, or something in
+    // the success path above threw unexpectedly. This is an UNEXPECTED
+    // failure of a dependency — not an EXPECTED typed failure — so it's
+    // caught and handled here rather than left to crash the process
+    // (Bun terminates on an unhandled rejection, which would take down
+    // both the Slack webhook and the web UI). This function must never
+    // reject once this fix lands.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`slack poller: investigation ${investigationId} failed: ${message}`);
+    try {
+      const failureResult = await postMessageImpl({
+        channel: slackTarget.channel,
+        thread_ts: slackTarget.thread_ts,
+        text: `Investigation failed: ${message}. Check server logs.`,
+      });
+      logIfFailed(failureResult, "failure");
+    } catch (postErr) {
+      // Even the failure-notification post must not escape as an
+      // unhandled rejection.
+      console.error(
+        `slack poller: failed to post failure notification for investigation ${investigationId}: ${
+          postErr instanceof Error ? postErr.message : String(postErr)
+        }`,
+      );
+    }
+  } finally {
+    // Always clean up the polling interval, regardless of outcome, so it
+    // never leaks.
+    clearIntervalImpl(timer);
+  }
 }

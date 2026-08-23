@@ -166,4 +166,53 @@ describe("pollAndPost", () => {
     // failed here, same postMessageImpl) — neither throws.
     expect(callCount).toBe(2);
   });
+
+  test("a rejecting resultPromise posts a failure message, clears the interval, and does not reject", async () => {
+    const investigation = await createInvestigation({ problemDescription: "test" });
+    const sessionId = investigation.id;
+    const state = createInvestigationState();
+    registerSession(sessionId, state);
+
+    const posts: PostMessageInput[] = [];
+    const postMessageImpl = async (input: PostMessageInput): Promise<PostMessageResult> => {
+      posts.push(input);
+      return { ok: true, ts: "1700000000.000100" };
+    };
+
+    const { setIntervalImpl, clearIntervalImpl } = manualInterval();
+    let clearIntervalCallCount = 0;
+    const trackedClearIntervalImpl: typeof clearInterval = (timer) => {
+      clearIntervalCallCount++;
+      clearIntervalImpl(timer as never);
+    };
+
+    const resultPromise = Promise.reject<InvestigationResult>(
+      new Error("Anthropic API rate limited"),
+    );
+
+    // This is the same invocation shape handler.ts uses: `void
+    // pollAndPost(...)`. If pollAndPost's own returned promise could still
+    // reject here, that `void` call would itself become an unhandled
+    // rejection and crash the process — so we assert directly that
+    // awaiting it never throws.
+    await expect(
+      pollAndPost(
+        sessionId,
+        investigation.id,
+        resultPromise,
+        { channel: "C123", thread_ts: "1700000000.000000" },
+        { setIntervalImpl, clearIntervalImpl: trackedClearIntervalImpl, postMessageImpl },
+      ),
+    ).resolves.toBeUndefined();
+
+    unregisterSession(sessionId);
+
+    expect(clearIntervalCallCount).toBe(1);
+
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.channel).toBe("C123");
+    expect(posts[0]!.thread_ts).toBe("1700000000.000000");
+    expect(posts[0]!.text).toContain("Investigation failed");
+    expect(posts[0]!.text).toContain("Anthropic API rate limited");
+  });
 });

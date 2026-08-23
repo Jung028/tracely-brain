@@ -89,7 +89,17 @@ export function createServer(port: number = DEFAULT_PORT) {
               // Not awaited — Slack requires a fast ack; the investigation
               // itself runs for minutes. handleAppMention is itself
               // internally non-blocking (see src/slack/handler.ts).
-              void handleAppMention(event as unknown as AppMentionEvent);
+              // .catch() is required: an unhandled rejection here (e.g.
+              // createInvestigation's Postgres call failing) would crash
+              // the whole Bun process — externally reachable from this
+              // signature-gated but still externally-triggerable route.
+              void handleAppMention(event as unknown as AppMentionEvent).catch((err) => {
+                console.error(
+                  `slack /events: handleAppMention failed: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                );
+              });
             }
           }
 

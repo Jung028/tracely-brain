@@ -81,6 +81,60 @@ describe("POST /slack/events", () => {
   // behavior above is what's specific to this route; the full
   // app_mention -> handleAppMention -> pollAndPost flow is already
   // covered with injected mocks in Task 4's unit tests.
+  // A malformed app_mention event (missing `text`) makes handleAppMention's
+  // `event.text.replace(...)` throw synchronously, before it ever reaches
+  // createInvestigation or investigate() — so this exercises a genuine
+  // rejection of handleAppMention's real promise (no injection needed, no
+  // Anthropic/DB call reached) without violating this file's established
+  // "never trigger a real app_mention -> investigate() flow" rule above.
+  // It reproduces the exact class of bug this test guards against: prior
+  // to the `.catch()` fix on the route's `void handleAppMention(...)`
+  // call, this rejection was unhandled and would crash the whole Bun
+  // process (both the Slack webhook and the web UI going down together).
+  test("an app_mention event that makes handleAppMention reject still returns 200 and never surfaces as an unhandled rejection", async () => {
+    process.env.SLACK_SIGNING_SECRET = "test-secret";
+    server = createServer(0);
+
+    let unhandledRejection: unknown = undefined;
+    const onUnhandledRejection = (err: unknown) => {
+      unhandledRejection = err;
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const rawBody = JSON.stringify({
+        type: "event_callback",
+        // Deliberately missing `text` — handleAppMention does
+        // `event.text.replace(...)` unconditionally, so this throws a
+        // TypeError inside handleAppMention before any DB or Anthropic
+        // call is made.
+        event: { type: "app_mention", channel: "C123", ts: "1700000000.000000" },
+      });
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const signature = sign("test-secret", timestamp, rawBody);
+
+      const res = await fetch(new URL("/slack/events", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-slack-request-timestamp": timestamp,
+          "x-slack-signature": signature,
+        },
+        body: rawBody,
+      });
+
+      expect(res.status).toBe(200);
+
+      // Give the deliberately-not-awaited handleAppMention promise a chance
+      // to reject and (pre-fix) surface as an unhandled rejection.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(unhandledRejection).toBeUndefined();
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
   test("an event_callback with an unrecognized event type still returns 200 (ignored, not an error)", async () => {
     process.env.SLACK_SIGNING_SECRET = "test-secret";
     server = createServer(0);
