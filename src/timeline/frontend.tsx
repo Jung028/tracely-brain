@@ -11,7 +11,10 @@ function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/timeline/demo")
+    const investigationId = new URLSearchParams(window.location.search).get("investigation");
+    const url = investigationId ? `/api/timeline/${investigationId}` : "/api/timeline/demo";
+
+    fetch(url)
       .then((res) => {
         if (!res.ok) {
           throw new Error(`Request failed with status ${res.status}`);
