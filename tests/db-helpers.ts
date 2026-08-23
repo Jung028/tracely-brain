@@ -6,5 +6,5 @@ import { sql } from "bun";
  * across test runs within a single schema lifetime.
  */
 export async function truncateAll(): Promise<void> {
-  await sql`TRUNCATE TABLE relationship_provenance, relationships, entities RESTART IDENTITY CASCADE`;
+  await sql`TRUNCATE TABLE relationship_provenance, relationships, entities, investigations RESTART IDENTITY CASCADE`;
 }
