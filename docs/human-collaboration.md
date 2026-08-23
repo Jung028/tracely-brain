@@ -43,10 +43,10 @@ const result = await resultPromise; // the authoritative final InvestigationResu
 function getInvestigationState(sessionId: string): LiveInvestigationState | undefined;
 
 interface LiveInvestigationState {
-  sessionId: string;
-  status: "IN_PROGRESS";
-  stepNumber: number;
-  hypotheses: readonly Hypothesis[];
+  readonly sessionId: string;
+  readonly status: "IN_PROGRESS";
+  readonly stepNumber: number;
+  readonly hypotheses: readonly Hypothesis[];
 }
 ```
 
