@@ -224,7 +224,7 @@ Returns: InvestigationTimeline (or 404 if not found / still in progress)
 - FR-34's persistent link endpoint.
 - Retrieves the investigation by `:id` using `getInvestigation`.
 - Returns `404 Not Found` if the investigation doesn't exist, is still `IN_PROGRESS`, or has no result.
-- Returns `200 OK` with the `investigation.result.timeline` on success (a `TimelineStep[]` and metadata; see `docs/DATA-MODEL.md`).
+- Returns `200 OK` with the `investigation.result.timeline` on success (an `InvestigationTimeline`; see `docs/DATA-MODEL.md`).
 
 ---
 
@@ -278,4 +278,4 @@ A Slack mention (`@bot-name what is this error?`) triggers:
 - `tests/slack/client.test.ts` — API calls with and without token, malformed responses, fetch implementation injection.
 - `tests/slack/handler.test.ts` — app_mention event parsing, investigation creation, message posting, thread routing.
 - `tests/slack/poller.test.ts` — polling intervals, progress posts on stepNumber advance, final result persistence, failure report rendering.
-- `tests/timeline/server.test.ts` — `POST /slack/events` signature verification, challenge response, event routing; `GET /api/timeline/:id` retrieval and 404 cases.
+- `tests/timeline/slack-routes.test.ts` — `POST /slack/events` signature verification, challenge response, event routing; `GET /api/timeline/:id` retrieval and 404 cases.
