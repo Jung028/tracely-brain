@@ -29,7 +29,11 @@ function insufficientEvidence(
   hypothesesConsidered: Hypothesis[],
   reason = "no hypothesis reached the confirmation threshold",
 ): Extract<InvestigationResult, { outcome: "INSUFFICIENT_EVIDENCE" }> {
-  return { outcome: "INSUFFICIENT_EVIDENCE", hypothesesConsidered, reason };
+  // toolCalls is module 04's field (merged into main after this test was
+  // originally written against module 03 alone) — buildFailureReport
+  // doesn't read it (see src/failure/report.ts's "known limitation" note),
+  // so an empty array is an accurate, unused fixture default here.
+  return { outcome: "INSUFFICIENT_EVIDENCE", hypothesesConsidered, reason, toolCalls: [] };
 }
 
 describe("buildFailureReport", () => {

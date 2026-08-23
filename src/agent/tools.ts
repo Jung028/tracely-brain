@@ -36,10 +36,16 @@ export interface InvestigationState {
   // below for the actual grouping logic.
   batchCounter: number;
   batchOpen: boolean;
+  // FR-28 (module 06): a coarse, real progress counter — incremented once
+  // per tool invocation via withStep, regardless of which tool. Distinct
+  // from concurrencyGroup/toolCalls (module 04's per-call evidence log):
+  // stepNumber is a single running total a live poller can compare across
+  // reads, not a structured record.
+  stepNumber: number;
 }
 
 export function createInvestigationState(): InvestigationState {
-  return { hypotheses: [], toolCalls: [], batchCounter: 0, batchOpen: false };
+  return { hypotheses: [], toolCalls: [], batchCounter: 0, batchOpen: false, stepNumber: 0 };
 }
 
 interface ToolCallHandle {
@@ -129,6 +135,16 @@ function replaceHypothesis(state: InvestigationState, updated: Hypothesis): void
   }
 }
 
+function withStep<Input>(
+  state: InvestigationState,
+  run: (input: Input) => Promise<string>,
+): (input: Input) => Promise<string> {
+  return async (input: Input) => {
+    state.stepNumber++;
+    return run(input);
+  };
+}
+
 export function createTools(state: InvestigationState): BetaRunnableTool<unknown>[] {
   const queryBrain = betaZodTool({
     name: "query_brain",
@@ -155,7 +171,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
           "Why you're making this call right now, in relation to the current investigation or hypothesis.",
         ),
     }),
-    run: async (input) => {
+    run: withStep(state, async (input) => {
       // Must happen before any `await` below — see beginToolCall's comment.
       const call = beginToolCall(state);
 
@@ -180,7 +196,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       });
       finishToolCall(state, call, "query_brain", input, result);
       return withStepId(call.id, JSON.stringify(result));
-    },
+    }),
   });
 
   const searchCode = betaZodTool({
@@ -196,7 +212,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
           "Why you're making this call right now, in relation to the current investigation or hypothesis.",
         ),
     }),
-    run: async (input) => {
+    run: withStep(state, async (input) => {
       // Must happen before any `await` below — see beginToolCall's comment.
       const call = beginToolCall(state);
 
@@ -228,7 +244,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       }
       finishToolCall(state, call, "search_code", input, results);
       return withStepId(call.id, results.join("\n\n"));
-    },
+    }),
   });
 
   // Stubbed per Scope Decision #2 in the design doc: real PostgreSQL/Datadog
@@ -250,12 +266,12 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
           "Why you're making this call right now, in relation to the current investigation or hypothesis.",
         ),
     }),
-    run: async (input) => {
+    run: withStep(state, async (input) => {
       const call = beginToolCall(state);
       const result = { status: "NOT_IMPLEMENTED", tool: "query_database" };
       finishToolCall(state, call, "query_database", input, result);
       return withStepId(call.id, JSON.stringify(result));
-    },
+    }),
   });
 
   const searchLogs = betaZodTool({
@@ -271,12 +287,12 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
           "Why you're making this call right now, in relation to the current investigation or hypothesis.",
         ),
     }),
-    run: async (input) => {
+    run: withStep(state, async (input) => {
       const call = beginToolCall(state);
       const result = { status: "NOT_IMPLEMENTED", tool: "search_logs" };
       finishToolCall(state, call, "search_logs", input, result);
       return withStepId(call.id, JSON.stringify(result));
-    },
+    }),
   });
 
   const proposeHypothesisTool = betaZodTool({
@@ -287,11 +303,11 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
     inputSchema: z.object({
       statement: z.string().describe("A specific, falsifiable statement of the hypothesis"),
     }),
-    run: async (input) => {
+    run: withStep(state, async (input) => {
       const hypothesis = proposeHypothesisFn(input.statement);
       state.hypotheses.push(hypothesis);
       return `created hypothesis ${hypothesis.id}: ${hypothesis.statement}`;
-    },
+    }),
   });
 
   const updateHypothesisTool = betaZodTool({
@@ -315,7 +331,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
         .optional()
         .describe("Id of the prior evidence-tool call this evidence cites, if any"),
     }),
-    run: async (input) => {
+    run: withStep(state, async (input) => {
       const hypothesis = findHypothesis(state, input.hypothesisId);
       if (!hypothesis) {
         return `hypothesis not found: ${input.hypothesisId}`;
@@ -350,7 +366,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
 
       replaceHypothesis(state, updated);
       return `hypothesis ${updated.id} is now ${updated.status} (confidence ${updated.confidence.toFixed(2)})`;
-    },
+    }),
   });
 
   // Each tool above is a `BetaRunnableTool<Specific>` for its own Zod input
