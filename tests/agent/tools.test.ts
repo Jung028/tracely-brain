@@ -111,3 +111,30 @@ describe("queryDatabase / searchLogs stubs", () => {
     expect(result).toContain("NOT_IMPLEMENTED");
   });
 });
+
+describe("stepNumber tracking", () => {
+  test("starts at 0 and increments by exactly 1 per tool call, across different tools", async () => {
+    const state = createInvestigationState();
+    const tools = createTools(state);
+    const propose = getTool(tools, "propose_hypothesis");
+    const queryDatabase = getTool(tools, "query_database");
+
+    expect(state.stepNumber).toBe(0);
+
+    await propose.run({ statement: "Scheduler is disabled" });
+    expect(state.stepNumber).toBe(1);
+
+    await queryDatabase.run({ query: "SELECT 1" });
+    expect(state.stepNumber).toBe(2);
+
+    const hypothesisId = state.hypotheses[0].id;
+    const update = getTool(tools, "update_hypothesis");
+    await update.run({
+      hypothesisId,
+      direction: "supporting",
+      description: "n/a",
+      toolSource: "query_database",
+    });
+    expect(state.stepNumber).toBe(3);
+  });
+});

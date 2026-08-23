@@ -19,10 +19,11 @@ import type { Evidence, Hypothesis } from "./types";
 
 export interface InvestigationState {
   hypotheses: Hypothesis[];
+  stepNumber: number;
 }
 
 export function createInvestigationState(): InvestigationState {
-  return { hypotheses: [] };
+  return { hypotheses: [], stepNumber: 0 };
 }
 
 function findHypothesis(
@@ -37,6 +38,16 @@ function replaceHypothesis(state: InvestigationState, updated: Hypothesis): void
   if (idx !== -1) {
     state.hypotheses[idx] = updated;
   }
+}
+
+function withStep<Input>(
+  state: InvestigationState,
+  run: (input: Input) => Promise<string>,
+): (input: Input) => Promise<string> {
+  return async (input: Input) => {
+    state.stepNumber++;
+    return run(input);
+  };
 }
 
 export function createTools(state: InvestigationState): BetaRunnableTool<unknown>[] {
@@ -60,7 +71,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       relationshipTypes: z.array(z.enum(RelationshipType)).optional(),
       maxDepth: z.number().int().min(1).max(5).default(2),
     }),
-    run: async (input) => {
+    run: withStep(state, async (input) => {
       if (input.mode === "search") {
         const entities = await findEntities({
           domain: input.domain,
@@ -78,7 +89,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
         maxDepth: input.maxDepth,
       });
       return JSON.stringify(result);
-    },
+    }),
   });
 
   const searchCode = betaZodTool({
@@ -89,7 +100,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
     inputSchema: z.object({
       pathContains: z.string().describe("Substring to match against file paths"),
     }),
-    run: async (input) => {
+    run: withStep(state, async (input) => {
       const files = await findEntities({ domain: "Code", entityType: "File" });
       const matches = files.filter((f) => f.name.includes(input.pathContains));
       if (matches.length === 0) {
@@ -115,7 +126,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
         }
       }
       return results.join("\n\n");
-    },
+    }),
   });
 
   // Stubbed per Scope Decision #2 in the design doc: real PostgreSQL/Datadog
@@ -130,9 +141,9 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       "NOT_IMPLEMENTED marker; treat this the same as an unavailable source, not as an " +
       "empty result.",
     inputSchema: z.object({ query: z.string() }),
-    run: async () => {
+    run: withStep(state, async () => {
       return JSON.stringify({ status: "NOT_IMPLEMENTED", tool: "query_database" });
-    },
+    }),
   });
 
   const searchLogs = betaZodTool({
@@ -141,9 +152,9 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       "Search Datadog logs. NOT YET IMPLEMENTED — always returns a NOT_IMPLEMENTED marker; " +
       "treat this the same as an unavailable source, not as an empty result.",
     inputSchema: z.object({ query: z.string() }),
-    run: async () => {
+    run: withStep(state, async () => {
       return JSON.stringify({ status: "NOT_IMPLEMENTED", tool: "search_logs" });
-    },
+    }),
   });
 
   const proposeHypothesisTool = betaZodTool({
@@ -154,11 +165,11 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
     inputSchema: z.object({
       statement: z.string().describe("A specific, falsifiable statement of the hypothesis"),
     }),
-    run: async (input) => {
+    run: withStep(state, async (input) => {
       const hypothesis = proposeHypothesisFn(input.statement);
       state.hypotheses.push(hypothesis);
       return `created hypothesis ${hypothesis.id}: ${hypothesis.statement}`;
-    },
+    }),
   });
 
   const updateHypothesisTool = betaZodTool({
@@ -174,7 +185,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
       description: z.string(),
       toolSource: z.string().describe("Which tool produced this evidence, e.g. query_brain"),
     }),
-    run: async (input) => {
+    run: withStep(state, async (input) => {
       const hypothesis = findHypothesis(state, input.hypothesisId);
       if (!hypothesis) {
         return `hypothesis not found: ${input.hypothesisId}`;
@@ -195,7 +206,7 @@ export function createTools(state: InvestigationState): BetaRunnableTool<unknown
 
       replaceHypothesis(state, updated);
       return `hypothesis ${updated.id} is now ${updated.status} (confidence ${updated.confidence.toFixed(2)})`;
-    },
+    }),
   });
 
   // Each tool above is a `BetaRunnableTool<Specific>` for its own Zod input
