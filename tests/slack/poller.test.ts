@@ -87,6 +87,8 @@ describe("pollAndPost", () => {
     expect(posts[1]!.text).toContain(confirmedHypothesis.statement);
     expect(posts[1]!.text).toContain(`investigation=${investigation.id}`);
 
+    expect(posts[1]!.text).toContain("Status: RCA_IDENTIFIED");
+
     const stored = await getInvestigation(investigation.id);
     expect(stored!.status).toBe("RCA_IDENTIFIED");
     expect(stored!.result).not.toBeNull();
@@ -124,6 +126,7 @@ describe("pollAndPost", () => {
 
     expect(posts).toHaveLength(1);
     expect(posts[0]!.text).toContain("NOT CONFIRMED");
+    expect(posts[0]!.text).toContain("Status: MANUAL_REVIEW_REQUIRED");
 
     const stored = await getInvestigation(investigation.id);
     expect(stored!.status).toBe("MANUAL_REVIEW_REQUIRED");
@@ -131,6 +134,7 @@ describe("pollAndPost", () => {
 
   test("a failed progress-update postMessage call is logged and does not stop polling or crash", async () => {
     const investigation = await createInvestigation({ problemDescription: "test" });
+    await beginInvestigating(investigation.id);
     const sessionId = investigation.id;
     const state = createInvestigationState();
     registerSession(sessionId, state);

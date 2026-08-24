@@ -41,6 +41,7 @@ describe("handleAppMention", () => {
     expect(postCalls[0]!.channel).toBe("C123");
     expect(postCalls[0]!.thread_ts).toBe("1700000000.000000");
     expect(postCalls[0]!.text).toContain("Investigating");
+    expect(postCalls[0]!.text).toContain("Status: INVESTIGATING");
 
     const idMatch = /investigation=([0-9a-f-]{36})/.exec(postCalls[0]!.text);
     expect(idMatch).toBeTruthy();

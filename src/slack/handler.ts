@@ -1,11 +1,12 @@
 // FR-32/33: the only place this module's Slack-specific code meets
-// modules 03/06's investigation lifecycle. No investigation logic here —
-// this only orchestrates: create the record, ack, kick off investigate()
-// without blocking, hand off progress/completion to the poller.
+// modules 03/06/08's investigation lifecycle. No investigation logic here —
+// this only orchestrates: create the record, transition it to
+// INVESTIGATING (FR-35), ack, kick off investigate() without blocking,
+// hand off progress/completion to the poller.
 import { investigate } from "../agent";
 import type { InvestigateOptions } from "../agent";
 import type { InvestigationResult } from "../agent/types";
-import { createInvestigation } from "../investigations";
+import { beginInvestigating, createInvestigation } from "../investigations";
 import { postMessage } from "./client";
 import type { PostMessageResult, PostMessageInput } from "./client";
 import { pollAndPost } from "./poller";
@@ -46,11 +47,23 @@ export async function handleAppMention(
     slackThreadTs: threadTs,
   });
 
+  // CREATED -> INVESTIGATING (FR-35). In the real flow this can only fail
+  // if the record isn't actually still CREATED, which shouldn't happen —
+  // nothing else touches a brand-new record before this call. A failure
+  // here is logged but doesn't block the investigation from proceeding;
+  // the Slack-visible status line below falls back to a neutral label
+  // rather than failing the whole request over lifecycle bookkeeping.
+  const began = await beginInvestigating(investigation.id);
+  if (!began.ok) {
+    console.error(`slack handler: beginInvestigating failed for ${investigation.id}: ${began.error}`);
+  }
+  const status = began.ok ? began.investigation.status : "INVESTIGATING";
+
   const link = `${baseUrl}/?investigation=${investigation.id}`;
   await postMessageImpl({
     channel: event.channel,
     thread_ts: threadTs,
-    text: `Investigating — I'll post updates here. Full view: ${link}`,
+    text: `Investigating — I'll post updates here. Full view: ${link}\nStatus: ${status}`,
   });
 
   const resultPromise = investigateImpl(problemDescription, { sessionId: investigation.id });
