@@ -52,7 +52,7 @@ export function transition(
     };
   }
 
-  const nextState = TRANSITIONS[current][event.type];
+  const nextState = TRANSITIONS[current]?.[event.type];
   if (!nextState) {
     return {
       ok: false,

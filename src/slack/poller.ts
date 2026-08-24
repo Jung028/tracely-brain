@@ -61,18 +61,19 @@ export async function pollAndPost(
 
     const timeline = buildTimeline(result.toolCalls);
     const completed = await completeInvestigation(investigationId, { result, timeline });
+    const linkLine = completed.ok
+      ? `\nFull view: ${baseUrl}/?investigation=${investigationId}\nStatus: ${completed.investigation.status}`
+      : `\n(Result could not be saved — full view unavailable.)`;
     if (!completed.ok) {
       console.error(
         `slack poller: completeInvestigation failed for ${investigationId}: ${completed.error}`,
       );
     }
-    const statusLine = completed.ok ? `\nStatus: ${completed.investigation.status}` : "";
 
-    const link = `${baseUrl}/?investigation=${investigationId}`;
     const finalText =
       result.outcome === "CONFIRMED"
-        ? `✅ Root cause confirmed: ${result.rca}\nFull view: ${link}${statusLine}`
-        : `${renderFailureReport(buildFailureReport(result))}\nFull view: ${link}${statusLine}`;
+        ? `✅ Root cause confirmed: ${result.rca}${linkLine}`
+        : `${renderFailureReport(buildFailureReport(result))}${linkLine}`;
 
     const finalResult = await postMessageImpl({
       channel: slackTarget.channel,

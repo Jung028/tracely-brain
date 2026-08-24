@@ -78,6 +78,9 @@ export async function beginInvestigating(id: string): Promise<InvestigationTrans
     WHERE id = ${id}
     RETURNING *
   `;
+  if (!row) {
+    return { ok: false, error: `investigation update failed unexpectedly for: ${id}` };
+  }
   return { ok: true, investigation: rowToInvestigation(row) };
 }
 
@@ -106,6 +109,9 @@ export async function completeInvestigation(
     WHERE id = ${id}
     RETURNING *
   `;
+  if (!row) {
+    return { ok: false, error: `investigation update failed unexpectedly for: ${id}` };
+  }
   return { ok: true, investigation: rowToInvestigation(row) };
 }
 
@@ -131,10 +137,13 @@ export async function reopenInvestigation(id: string): Promise<InvestigationTran
 
   const [row] = await sql<InvestigationRow[]>`
     UPDATE investigations
-    SET status = ${result.state}, retry_count = ${current.retryCount + 1}, updated_at = now()
+    SET status = ${result.state}, retry_count = ${current.retryCount + 1}, result = NULL, updated_at = now()
     WHERE id = ${id}
     RETURNING *
   `;
+  if (!row) {
+    return { ok: false, error: `investigation update failed unexpectedly for: ${id}` };
+  }
   return { ok: true, investigation: rowToInvestigation(row) };
 }
 
@@ -156,5 +165,8 @@ export async function closeInvestigation(id: string): Promise<InvestigationTrans
     WHERE id = ${id}
     RETURNING *
   `;
+  if (!row) {
+    return { ok: false, error: `investigation update failed unexpectedly for: ${id}` };
+  }
   return { ok: true, investigation: rowToInvestigation(row) };
 }

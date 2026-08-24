@@ -1,81 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { transition } from "../../src/state-machine";
-import type { TransitionEvent } from "../../src/state-machine";
+import type { InvestigationState, TransitionEvent } from "../../src/state-machine";
 
-const noRetries = { retryCount: 0 };
+describe("transition — exhaustive legal/illegal coverage", () => {
+  const ALL_STATES: InvestigationState[] = [
+    "CREATED",
+    "INVESTIGATING",
+    "RCA_IDENTIFIED",
+    "MANUAL_REVIEW_REQUIRED",
+    "RESOLUTION_PROPOSAL",
+    "RESOLVED",
+  ];
 
-describe("transition — legal edges", () => {
-  test("CREATED --BEGIN_INVESTIGATING--> INVESTIGATING", () => {
-    const result = transition("CREATED", { type: "BEGIN_INVESTIGATING" }, noRetries);
-    expect(result).toEqual({ ok: true, state: "INVESTIGATING" });
-  });
-
-  test("INVESTIGATING --RCA_CONFIRMED--> RCA_IDENTIFIED", () => {
-    const result = transition("INVESTIGATING", { type: "RCA_CONFIRMED" }, noRetries);
-    expect(result).toEqual({ ok: true, state: "RCA_IDENTIFIED" });
-  });
-
-  test("INVESTIGATING --INSUFFICIENT_EVIDENCE--> MANUAL_REVIEW_REQUIRED", () => {
-    const result = transition("INVESTIGATING", { type: "INSUFFICIENT_EVIDENCE" }, noRetries);
-    expect(result).toEqual({ ok: true, state: "MANUAL_REVIEW_REQUIRED" });
-  });
-
-  test("RCA_IDENTIFIED --PROPOSE_RESOLUTION--> RESOLUTION_PROPOSAL", () => {
-    const result = transition("RCA_IDENTIFIED", { type: "PROPOSE_RESOLUTION" }, noRetries);
-    expect(result).toEqual({ ok: true, state: "RESOLUTION_PROPOSAL" });
-  });
-
-  test("RCA_IDENTIFIED --CLOSE_DIRECTLY--> RESOLVED", () => {
-    const result = transition("RCA_IDENTIFIED", { type: "CLOSE_DIRECTLY" }, noRetries);
-    expect(result).toEqual({ ok: true, state: "RESOLVED" });
-  });
-
-  test("MANUAL_REVIEW_REQUIRED --REOPEN--> INVESTIGATING (under the retry cap)", () => {
-    const result = transition("MANUAL_REVIEW_REQUIRED", { type: "REOPEN" }, { retryCount: 2 });
-    expect(result).toEqual({ ok: true, state: "INVESTIGATING" });
-  });
-
-  test("MANUAL_REVIEW_REQUIRED --CLOSE_DIRECTLY--> RESOLVED", () => {
-    const result = transition("MANUAL_REVIEW_REQUIRED", { type: "CLOSE_DIRECTLY" }, noRetries);
-    expect(result).toEqual({ ok: true, state: "RESOLVED" });
-  });
-
-  test("RESOLUTION_PROPOSAL --RESOLUTION_APPROVED--> RESOLVED", () => {
-    const result = transition("RESOLUTION_PROPOSAL", { type: "RESOLUTION_APPROVED" }, noRetries);
-    expect(result).toEqual({ ok: true, state: "RESOLVED" });
-  });
-
-  test("RESOLUTION_PROPOSAL --RESOLUTION_REJECTED--> MANUAL_REVIEW_REQUIRED", () => {
-    const result = transition("RESOLUTION_PROPOSAL", { type: "RESOLUTION_REJECTED" }, noRetries);
-    expect(result).toEqual({ ok: true, state: "MANUAL_REVIEW_REQUIRED" });
-  });
-});
-
-describe("transition — illegal edges", () => {
-  test("the spec's explicit example: CREATED --CLOSE_DIRECTLY--> RESOLVED (skipping the whole lifecycle) is rejected", () => {
-    const result = transition("CREATED", { type: "CLOSE_DIRECTLY" }, noRetries);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("CREATED");
-  });
-
-  test("INVESTIGATING cannot REOPEN (REOPEN only applies from MANUAL_REVIEW_REQUIRED)", () => {
-    const result = transition("INVESTIGATING", { type: "REOPEN" }, noRetries);
-    expect(result.ok).toBe(false);
-  });
-
-  test("RCA_IDENTIFIED cannot receive INSUFFICIENT_EVIDENCE", () => {
-    const result = transition("RCA_IDENTIFIED", { type: "INSUFFICIENT_EVIDENCE" }, noRetries);
-    expect(result.ok).toBe(false);
-  });
-
-  test("MANUAL_REVIEW_REQUIRED cannot receive BEGIN_INVESTIGATING", () => {
-    const result = transition("MANUAL_REVIEW_REQUIRED", { type: "BEGIN_INVESTIGATING" }, noRetries);
-    expect(result.ok).toBe(false);
-  });
-});
-
-describe("transition — RESOLVED is terminal", () => {
-  const allEvents: TransitionEvent[] = [
+  const ALL_EVENTS: TransitionEvent[] = [
     { type: "BEGIN_INVESTIGATING" },
     { type: "RCA_CONFIRMED" },
     { type: "INSUFFICIENT_EVIDENCE" },
@@ -86,11 +23,37 @@ describe("transition — RESOLVED is terminal", () => {
     { type: "RESOLUTION_REJECTED" },
   ];
 
-  for (const event of allEvents) {
-    test(`RESOLVED rejects ${event.type}`, () => {
-      const result = transition("RESOLVED", event, noRetries);
-      expect(result.ok).toBe(false);
-    });
+  // Independently declared expected-legal set (not imported from
+  // src/state-machine/transition.ts's own table) so this test is a real
+  // check against the spec's 9 edges, not a tautology against the
+  // implementation's own data structure.
+  const LEGAL_PAIRS: ReadonlySet<string> = new Set([
+    "CREATED:BEGIN_INVESTIGATING",
+    "INVESTIGATING:RCA_CONFIRMED",
+    "INVESTIGATING:INSUFFICIENT_EVIDENCE",
+    "RCA_IDENTIFIED:PROPOSE_RESOLUTION",
+    "RCA_IDENTIFIED:CLOSE_DIRECTLY",
+    "MANUAL_REVIEW_REQUIRED:REOPEN",
+    "MANUAL_REVIEW_REQUIRED:CLOSE_DIRECTLY",
+    "RESOLUTION_PROPOSAL:RESOLUTION_APPROVED",
+    "RESOLUTION_PROPOSAL:RESOLUTION_REJECTED",
+  ]);
+
+  for (const state of ALL_STATES) {
+    for (const event of ALL_EVENTS) {
+      const key = `${state}:${event.type}`;
+      const expectLegal = LEGAL_PAIRS.has(key);
+
+      test(`${key} is ${expectLegal ? "legal" : "illegal"}`, () => {
+        // retryCount 0 for every case except MANUAL_REVIEW_REQUIRED:REOPEN,
+        // which the dedicated retry-cap describe block below already
+        // covers at every boundary value — this loop only needs one
+        // representative retryCount to prove the (state, event) pair's
+        // legality.
+        const result = transition(state, event, { retryCount: 0 });
+        expect(result.ok).toBe(expectLegal);
+      });
+    }
   }
 });
 

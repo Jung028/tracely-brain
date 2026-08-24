@@ -6,6 +6,8 @@ This documents module 07: the Slack-facing layer that connects production incide
 - **FR-33** — Progress posts as investigation proceeds (stepNumber advances), not just a final message
 - **FR-34** — Persistent investigation link for asynchronous review
 
+See `docs/state-machine.md` for the full FR-35 lifecycle this module's Investigation record now uses.
+
 ## Persistent Investigation Record
 
 The `Investigation` record (created by FR-32, updated by FR-33/34) persists indefinitely in Postgres, unlike the ephemeral in-memory session registry (module 06). It contains:
@@ -13,7 +15,8 @@ The `Investigation` record (created by FR-32, updated by FR-33/34) persists inde
 ```ts
 interface Investigation {
   readonly id: string;
-  readonly status: "IN_PROGRESS" | "CONFIRMED" | "INSUFFICIENT_EVIDENCE";
+  readonly status: InvestigationState; // "CREATED" | "INVESTIGATING" | "RCA_IDENTIFIED" | "MANUAL_REVIEW_REQUIRED" | "RESOLUTION_PROPOSAL" | "RESOLVED" — see docs/state-machine.md
+  readonly retryCount: number;
   readonly problemDescription: string;
   readonly slackChannelId: string | null;
   readonly slackThreadTs: string | null;
@@ -35,7 +38,7 @@ async function createInvestigation(input: {
 }): Promise<Investigation>;
 ```
 
-- Creates a new record with `status: "IN_PROGRESS"`, `result: null`.
+- Creates a new record with `status: "CREATED"`, `retryCount: 0`, `result: null`.
 - Returns the newly created `Investigation` with a generated UUID `id`.
 - Called by `handleAppMention` (see below) as the first step of FR-32.
 
@@ -45,11 +48,16 @@ async function createInvestigation(input: {
 async function completeInvestigation(
   id: string,
   outcome: { result: InvestigationResult; timeline: InvestigationTimeline },
-): Promise<Investigation>;
+): Promise<InvestigationTransitionResult>;
+
+type InvestigationTransitionResult =
+  | { ok: true; investigation: Investigation }
+  | { ok: false; error: string };
 ```
 
-- Persists the investigation's final result and timeline.
-- Sets `status: "CONFIRMED"` if `result.outcome === "CONFIRMED"`, otherwise `"INSUFFICIENT_EVIDENCE"`.
+- Validates the transition (via `docs/state-machine.md`'s state machine) before persisting — only succeeds if the record is currently `INVESTIGATING`.
+- On success, persists the investigation's final result and timeline, and sets `status: "RCA_IDENTIFIED"` if `result.outcome === "CONFIRMED"`, otherwise `"MANUAL_REVIEW_REQUIRED"`.
+- Returns `{ ok: false, error }` — never throws — if the record isn't found, or the transition is illegal (e.g. the record isn't currently `INVESTIGATING`).
 - Called by `pollAndPost` after `investigate()` resolves (see "The Call Sequence" below).
 
 ### `getInvestigation`
@@ -139,10 +147,11 @@ Signatures below are copied from `src/slack/handler.ts` — keep this file in sy
 - Implements FR-32: receives a Slack `app_mention` event and starts an investigation.
 - **Orchestrates, does not investigate** — no investigation logic here, only:
   1. Strip the leading `<@BOT_ID>` mention token from the event text.
-  2. Call `createInvestigation({ problemDescription, slackChannelId: event.channel, slackThreadTs })` to persist the record.
-  3. Post an immediate acknowledgment to the thread: `"Investigating — I'll post updates here. Full view: <link>"`
-  4. Call `investigateImpl(problemDescription, { sessionId: investigation.id })` without awaiting it — starts the long-running investigation.
-  5. Hand off to `pollAndPost` (see below) with the promise, so progress posts and final result are handled asynchronously.
+  2. Call `createInvestigation({ problemDescription, slackChannelId: event.channel, slackThreadTs })` to persist the record (starts in `status: "CREATED"`).
+  3. Call `beginInvestigating(investigation.id)` to transition `CREATED → INVESTIGATING` (see `docs/state-machine.md`). On failure, logs the error and falls back to a neutral `"INVESTIGATING"` status label rather than blocking the ack.
+  4. Post an immediate acknowledgment to the thread: `"Investigating — I'll post updates here. Full view: <link>\nStatus: <state>"`
+  5. Call `investigateImpl(problemDescription, { sessionId: investigation.id })` without awaiting it — starts the long-running investigation.
+  6. Hand off to `pollAndPost` (see below) with the promise, so progress posts and final result are handled asynchronously.
 - Returns immediately after the ack post; the investigation runs in the background.
 - Thread target (`thread_ts`) defaults to the event's own timestamp if not a reply (so all discussion stays in one thread).
 - Optional injection points for testing: `investigateImpl`, `postMessageImpl`, `baseUrl` (default `http://localhost:4300`).
@@ -182,11 +191,12 @@ Implements FR-33 (progress) and the result-posting half of FR-34:
 
 2. **Awaits result** — waits for `resultPromise` to resolve (the `investigate()` call from `handleAppMention`).
 
-3. **Persists** — calls `completeInvestigation(investigationId, { result, timeline })` to save the final investigation state.
+3. **Persists** — calls `completeInvestigation(investigationId, { result, timeline })`, which validates the transition and only persists if the record is currently `INVESTIGATING`. On failure (illegal transition), the error is logged and the status line is omitted from the final message below, but the message still posts.
 
 4. **Posts final message** — constructs and posts the result:
-   - If `result.outcome === "CONFIRMED"`: `"✅ Root cause confirmed: <result.rca>\nFull view: <link>"`
-   - Otherwise: renders the failure report (see `docs/failure-handling.md`), appended with `"\nFull view: <link>"`.
+   - If `result.outcome === "CONFIRMED"`: `"✅ Root cause confirmed: <result.rca>\nFull view: <link>\nStatus: <state>"`
+   - Otherwise: renders the failure report (see `docs/failure-handling.md`), appended with `"\nFull view: <link>\nStatus: <state>"`.
+   - The `Status: <state>` line is only appended when `completeInvestigation` succeeded.
 
 - Optional injection points for testing: `intervalMs`, `setIntervalImpl`, `clearIntervalImpl`, `postMessageImpl`, `baseUrl`.
 
@@ -223,7 +233,7 @@ Returns: InvestigationTimeline (or 404 if not found / still in progress)
 
 - FR-34's persistent link endpoint.
 - Retrieves the investigation by `:id` using `getInvestigation`.
-- Returns `404 Not Found` if the investigation doesn't exist, is still `IN_PROGRESS`, or has no result.
+- Returns `404 Not Found` if the investigation doesn't exist or has no stored result yet (i.e. hasn't reached `completeInvestigation` — see `docs/state-machine.md` for the full set of pre-completion states).
 - Returns `200 OK` with the `investigation.result.timeline` on success (an `InvestigationTimeline`; see `docs/DATA-MODEL.md`).
 
 ---
@@ -249,8 +259,9 @@ A Slack mention (`@bot-name what is this error?`) triggers:
 2. **Route handler** verifies signature → calls `handleAppMention(event)` without awaiting.
 
 3. **`handleAppMention`**:
-   - Calls `createInvestigation({ problemDescription, slackChannelId, slackThreadTs })` → persists record with `status: "IN_PROGRESS"` and a new UUID.
-   - Posts ack message to the thread: `"Investigating — I'll post updates here."`
+   - Calls `createInvestigation({ problemDescription, slackChannelId, slackThreadTs })` → persists record with `status: "CREATED"` and a new UUID.
+   - Calls `beginInvestigating(investigation.id)` → transitions to `INVESTIGATING` (see `docs/state-machine.md`).
+   - Posts ack message to the thread: `"Investigating — I'll post updates here. Full view: <link>\nStatus: INVESTIGATING"`
    - Calls `investigate(problemDescription, { sessionId: investigation.id })` — starts the investigation (not awaited).
    - Calls `pollAndPost(investigation.id, investigation.id, resultPromise, { channel, thread_ts })` — hands off to async polling/posting loop (not awaited).
    - Returns immediately.
@@ -259,8 +270,8 @@ A Slack mention (`@bot-name what is this error?`) triggers:
    - Polls `getInvestigationState(sessionId)` every 4 seconds.
    - Each time `stepNumber` advances, posts: `"Still investigating… (N steps, M hypotheses)"`
    - Awaits `resultPromise` (the `investigate()` call).
-   - Calls `completeInvestigation(investigationId, { result, timeline })` to persist the result.
-   - Posts the final message (confirmed RCA or failure report).
+   - Calls `completeInvestigation(investigationId, { result, timeline })` to persist the result and transition to `RCA_IDENTIFIED`/`MANUAL_REVIEW_REQUIRED` (see `docs/state-machine.md`).
+   - Posts the final message (confirmed RCA or failure report), including the current `Status: <state>`.
 
 5. **User clicks FR-34 link** (`/?investigation=<id>`) — UI fetches `GET /api/timeline/:id`, which calls `getInvestigation(id)` and returns the persisted timeline for rendering.
 

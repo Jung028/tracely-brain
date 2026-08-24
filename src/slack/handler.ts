@@ -57,7 +57,7 @@ export async function handleAppMention(
   if (!began.ok) {
     console.error(`slack handler: beginInvestigating failed for ${investigation.id}: ${began.error}`);
   }
-  const status = began.ok ? began.investigation.status : "INVESTIGATING";
+  const status = began.ok ? began.investigation.status : investigation.status;
 
   const link = `${baseUrl}/?investigation=${investigation.id}`;
   await postMessageImpl({
