@@ -228,13 +228,17 @@ Body: JSON payload from Slack
 
 ```
 GET /api/timeline/:id
-Returns: InvestigationTimeline (or 404 if not found / still in progress)
+Returns: { problemDescription, status, summary, steps } (or 404 if not found / still in progress)
 ```
 
 - FR-34's persistent link endpoint.
 - Retrieves the investigation by `:id` using `getInvestigation`.
 - Returns `404 Not Found` if the investigation doesn't exist or has no stored result yet (i.e. hasn't reached `completeInvestigation` — see `docs/state-machine.md` for the full set of pre-completion states).
-- Returns `200 OK` with the `investigation.result.timeline` on success (an `InvestigationTimeline`; see `docs/DATA-MODEL.md`).
+- Returns `200 OK` on success with:
+  - **`problemDescription`** — the investigation's original question.
+  - **`status`** — the investigation's current lifecycle state.
+  - **`summary`** — an `InvestigationSummary` (`src/timeline/summary.ts`, built by `buildSummary`) covering the outcome, `rca`/`reason`, and hypotheses.
+  - **`steps`** — the timeline steps array (unchanged; see `docs/DATA-MODEL.md`).
 
 ---
 

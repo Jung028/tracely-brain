@@ -103,13 +103,6 @@ body {
   flex-shrink: 0;
 }
 
-.timeline-step__why {
-  color: #c7c9cc;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .timeline-step__details {
   padding: 0 0.85rem 0.85rem;
   border-top: 1px solid #2a2d34;
@@ -152,4 +145,187 @@ body {
 .timeline-step__exploratory {
   color: #9aa0a6;
   font-style: italic;
+}
+
+/* --- Step row: stacked headline/why/finding layout with expand chevron --- */
+
+.timeline-step__toggle {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0.65rem 0.85rem;
+}
+
+.timeline-step__toggle:hover {
+  background: #1d2027;
+}
+
+.timeline-step__chevron {
+  flex-shrink: 0;
+  color: #5b8def;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.timeline-step__summary {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.timeline-step__headline {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.timeline-step__number {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #9aa0a6;
+  flex-shrink: 0;
+}
+
+.timeline-step__tool {
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #8ecdff;
+}
+
+.timeline-step__why {
+  color: #c7c9cc;
+  font-size: 0.88rem;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.timeline-step__finding {
+  color: #7fd99a;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+/* --- Investigation summary header --- */
+
+.timeline-summary {
+  border: 1px solid #2a2d34;
+  border-radius: 8px;
+  background: #171a20;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.timeline-summary__question {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.timeline-summary__meta {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.8rem;
+  color: #9aa0a6;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.timeline-summary__outcome {
+  border-radius: 6px;
+  padding: 0.65rem 0.85rem;
+}
+
+.timeline-summary__outcome--confirmed {
+  background: rgba(127, 217, 154, 0.08);
+  border: 1px solid rgba(127, 217, 154, 0.35);
+}
+
+.timeline-summary__outcome--unconfirmed {
+  background: rgba(255, 157, 122, 0.08);
+  border: 1px solid rgba(255, 157, 122, 0.35);
+}
+
+.timeline-summary__outcome-label {
+  display: block;
+  font-weight: 700;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.25rem;
+}
+
+.timeline-summary__outcome--confirmed .timeline-summary__outcome-label {
+  color: #7fd99a;
+}
+
+.timeline-summary__outcome--unconfirmed .timeline-summary__outcome-label {
+  color: #ff9d7a;
+}
+
+.timeline-summary__outcome p {
+  margin: 0;
+}
+
+.timeline-summary__hypotheses {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.timeline-summary__hypothesis {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  font-size: 0.85rem;
+}
+
+.timeline-summary__hypothesis-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+  color: #8ecdff;
+}
+
+.timeline-summary__hypothesis-status {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+}
+
+.timeline-summary__hypothesis--confirmed .timeline-summary__hypothesis-status {
+  background: rgba(127, 217, 154, 0.15);
+  color: #7fd99a;
+}
+
+.timeline-summary__hypothesis--refuted .timeline-summary__hypothesis-status {
+  background: rgba(255, 157, 122, 0.15);
+  color: #ff9d7a;
+}
+
+.timeline-summary__hypothesis--investigating .timeline-summary__hypothesis-status {
+  background: rgba(91, 141, 239, 0.15);
+  color: #5b8def;
+}
+
+.timeline-summary__no-hypotheses {
+  color: #9aa0a6;
+  font-style: italic;
+  margin: 0;
 }

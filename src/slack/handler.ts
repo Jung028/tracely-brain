@@ -41,6 +41,15 @@ export async function handleAppMention(
   const problemDescription = event.text.replace(LEADING_MENTION_RE, "").trim();
   const threadTs = event.thread_ts ?? event.ts;
 
+  if (problemDescription === "") {
+    await postMessageImpl({
+      channel: event.channel,
+      thread_ts: threadTs,
+      text: "I need a question to investigate — try mentioning me with a description of the problem, e.g. `@tracely why is CB-123456 stuck in WAIT_JUDGE?`",
+    });
+    return;
+  }
+
   const investigation = await createInvestigation({
     problemDescription,
     slackChannelId: event.channel,

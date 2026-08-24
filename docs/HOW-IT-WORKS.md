@@ -196,8 +196,9 @@ formats and displays the `ToolCallRecord[]` module 03 already captures (see
   - The server auto-starts only when run directly (`if (import.meta.main)`), so `createServer(port)`
     can be imported and started on an ephemeral port from tests without side effects.
 - **`TimelineView.tsx`** renders a chronological, collapsed-by-default, click-to-expand list
-  (FR-23). Expanding a step shows its `toolName`, `query`, `why`, and `result`, plus a
-  hypothesis-linkage line (FR-24 / NFR-18 — always an explicit visible state, never blank):
+  (FR-23). The collapsed headline already shows `toolName`; expanding a step additionally shows
+  `why`, `query`, and `result`, plus a hypothesis-linkage line (FR-24 / NFR-18 — always an
+  explicit visible state, never blank):
   `` Supports: H1 — scheduler-related workflow blockage `` for a supporting step,
   `` Refutes: H1 — <meaning> `` for a contradicting one, or
   `` Exploratory — not linked to a hypothesis `` when `hypothesisId` is `null`. Steps sharing a

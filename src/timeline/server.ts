@@ -11,6 +11,7 @@
 import index from "./index.html";
 import { investigate } from "../agent";
 import { buildTimeline } from "./build";
+import { buildSummary } from "./summary";
 import { demoToolCalls } from "./demoFixture";
 import { verifySlackSignature } from "../slack/verify";
 import { handleAppMention } from "../slack/handler";
@@ -113,7 +114,12 @@ export function createServer(port: number = DEFAULT_PORT) {
           if (!investigation || !investigation.result) {
             return new Response("not found", { status: 404 });
           }
-          return Response.json(investigation.result.timeline);
+          return Response.json({
+            problemDescription: investigation.problemDescription,
+            status: investigation.status,
+            summary: buildSummary(investigation.result.result),
+            steps: investigation.result.timeline.steps,
+          });
         },
       },
     },

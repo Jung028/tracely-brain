@@ -120,4 +120,62 @@ describe("handleAppMention", () => {
       toolCalls: [],
     });
   });
+
+  test("a mention with no question text posts a help message and never calls investigate()", async () => {
+    const postCalls: PostMessageInput[] = [];
+    const postMessageImpl = async (input: PostMessageInput): Promise<PostMessageResult> => {
+      postCalls.push(input);
+      return { ok: true, ts: "1700000000.000200" };
+    };
+
+    let investigateCalled = false;
+    const investigateImpl = async (): Promise<InvestigationResult> => {
+      investigateCalled = true;
+      return { outcome: "INSUFFICIENT_EVIDENCE", hypothesesConsidered: [], reason: "unreachable", toolCalls: [] };
+    };
+
+    await handleAppMention(
+      {
+        channel: "C123",
+        user: "U999",
+        text: "<@U0BOT123>",
+        ts: "1700000000.000300",
+      },
+      { postMessageImpl, investigateImpl },
+    );
+
+    expect(postCalls).toHaveLength(1);
+    expect(postCalls[0]!.channel).toBe("C123");
+    expect(postCalls[0]!.thread_ts).toBe("1700000000.000300");
+    expect(postCalls[0]!.text).toContain("need a question");
+    expect(postCalls[0]!.text).not.toContain("Investigating");
+
+    expect(investigateCalled).toBe(false);
+  });
+
+  test("a mention with only whitespace after stripping is also treated as empty", async () => {
+    const postCalls: PostMessageInput[] = [];
+    const postMessageImpl = async (input: PostMessageInput): Promise<PostMessageResult> => {
+      postCalls.push(input);
+      return { ok: true, ts: "1700000000.000400" };
+    };
+    let investigateCalled = false;
+    const investigateImpl = async (): Promise<InvestigationResult> => {
+      investigateCalled = true;
+      return { outcome: "INSUFFICIENT_EVIDENCE", hypothesesConsidered: [], reason: "unreachable", toolCalls: [] };
+    };
+
+    await handleAppMention(
+      {
+        channel: "C123",
+        user: "U999",
+        text: "<@U0BOT123>    ",
+        ts: "1700000000.000500",
+      },
+      { postMessageImpl, investigateImpl },
+    );
+
+    expect(postCalls).toHaveLength(1);
+    expect(investigateCalled).toBe(false);
+  });
 });
