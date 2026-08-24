@@ -112,4 +112,8 @@ describe("findingLine", () => {
     expect(findingLine({ meaning: null, result: [] })).toBe("No matches found");
     expect(findingLine({ meaning: null, result: { count: 14 } })).toBe('{"count":14}');
   });
+
+  test("falls back to summarizeResult(result) when meaning is an empty string", () => {
+    expect(findingLine({ meaning: "", result: { count: 14 } })).toBe('{"count":14}');
+  });
 });

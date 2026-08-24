@@ -74,7 +74,7 @@ export function summarizeResult(result: unknown): string {
 }
 
 export function findingLine(step: Pick<TimelineStep, "meaning" | "result">): string {
-  return step.meaning ?? summarizeResult(step.result);
+  return step.meaning && step.meaning.trim() !== "" ? step.meaning : summarizeResult(step.result);
 }
 
 // The agent's tool-call "reason" argument is what becomes step.why — when a
@@ -160,6 +160,9 @@ function StepRow({ step, stepNumber, total }: { step: TimelineStep; stepNumber: 
       </button>
       {expanded && (
         <div className="timeline-step__details">
+          <div>
+            <span className="label">Why:</span> {step.why}
+          </div>
           <div>
             <span className="label">Query:</span>
             <pre>{formatQuery(step.query, step.why)}</pre>

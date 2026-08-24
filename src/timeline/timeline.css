@@ -103,13 +103,6 @@ body {
   flex-shrink: 0;
 }
 
-.timeline-step__why {
-  color: #c7c9cc;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .timeline-step__details {
   padding: 0 0.85rem 0.85rem;
   border-top: 1px solid #2a2d34;
@@ -211,6 +204,9 @@ body {
 .timeline-step__why {
   color: #c7c9cc;
   font-size: 0.88rem;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .timeline-step__finding {
