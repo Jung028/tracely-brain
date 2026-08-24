@@ -6,7 +6,7 @@ for the full design rationale.
 
 ## The state diagram
 
-Seven states. `RESOLVED` is the only true terminal state — it accepts no events at all.
+Six states. `RESOLVED` is the only true terminal state — it accepts no events at all.
 
 | From | Event | To |
 |---|---|---|

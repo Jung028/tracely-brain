@@ -19,7 +19,7 @@ module having built a competing, half-guessed state graph first").
 
 ## The state diagram
 
-Seven states. `RESOLVED` is the only true terminal state (no outgoing transitions at all).
+Six states. `RESOLVED` is the only true terminal state (no outgoing transitions at all).
 
 ```
 CREATED
