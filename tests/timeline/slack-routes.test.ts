@@ -178,7 +178,7 @@ describe("GET /api/timeline/:id", () => {
     expect(res.status).toBe(404);
   });
 
-  test("returns the stored timeline, in the same shape as /api/timeline/demo, once complete", async () => {
+  test("returns the stored timeline steps, problemDescription, status, and summary once complete", async () => {
     server = createServer(0);
     const investigation = await createInvestigation({ problemDescription: "test" });
     await beginInvestigating(investigation.id);
@@ -195,7 +195,16 @@ describe("GET /api/timeline/:id", () => {
     const res = await fetch(new URL(`/api/timeline/${investigation.id}`, server.url));
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { steps: unknown[] };
-    expect(body).toEqual({ steps: [] });
+    const body = (await res.json()) as {
+      steps: unknown[];
+      problemDescription: string;
+      status: string;
+      summary: { outcome: string; reason: string | null };
+    };
+    expect(body.steps).toEqual([]);
+    expect(body.problemDescription).toBe("test");
+    expect(body.status).toBe("MANUAL_REVIEW_REQUIRED");
+    expect(body.summary.outcome).toBe("INSUFFICIENT_EVIDENCE");
+    expect(body.summary.reason).toBe("no hypothesis was proposed");
   });
 });

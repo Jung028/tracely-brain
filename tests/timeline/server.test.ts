@@ -12,6 +12,14 @@
 // path (missing/invalid problemDescription) is exercised here.
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer } from "../../src/timeline/server";
+import {
+  beginInvestigating,
+  completeInvestigation,
+  createInvestigation,
+} from "../../src/investigations";
+import { truncateAll } from "../db-helpers";
+import type { InvestigationResult } from "../../src/agent/types";
+import type { InvestigationTimeline } from "../../src/timeline/types";
 
 let server: ReturnType<typeof createServer> | undefined;
 
@@ -21,6 +29,10 @@ afterEach(async () => {
 });
 
 describe("timeline server", () => {
+  afterEach(async () => {
+    await truncateAll();
+  });
+
   test("GET / returns 200 with an HTML content type", async () => {
     server = createServer(0);
 
@@ -99,5 +111,80 @@ describe("timeline server", () => {
 
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(res.status).toBeLessThan(500);
+  });
+
+  test("GET /api/timeline/:id returns problemDescription, status, summary, and steps", async () => {
+    server = createServer(0);
+
+    const created = await createInvestigation({ problemDescription: "why is CB-123456 stuck in WAIT_JUDGE?" });
+    await beginInvestigating(created.id);
+
+    const result: InvestigationResult = {
+      outcome: "CONFIRMED",
+      hypothesis: {
+        id: "H1",
+        statement: "Scheduler is disabled",
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        status: "CONFIRMED",
+        confidence: 0.9,
+      },
+      rca: "The liability-assignment scheduler was disabled.",
+      evidenceTrail: [],
+      toolCalls: [],
+    };
+    const timeline: InvestigationTimeline = {
+      steps: [
+        {
+          id: "step-1",
+          toolName: "query_brain",
+          query: { mode: "search" },
+          why: "Find the relevant workflow.",
+          result: { status: "WAIT_JUDGE" },
+          meaning: "Confirms the task is stuck",
+          hypothesisId: "H1",
+          supports: "supporting",
+          timestamp: new Date("2026-08-24T12:00:00.000Z"),
+          concurrencyGroup: "batch-1",
+        },
+      ],
+    };
+    await completeInvestigation(created.id, { result, timeline });
+
+    const res = await fetch(new URL(`/api/timeline/${created.id}`, server.url));
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as {
+      problemDescription: string;
+      status: string;
+      summary: { outcome: string; rca: string | null; reason: string | null; hypotheses: unknown[] };
+      steps: unknown[];
+    };
+
+    expect(body.problemDescription).toBe("why is CB-123456 stuck in WAIT_JUDGE?");
+    expect(body.status).toBe("RCA_IDENTIFIED");
+    expect(body.summary.outcome).toBe("CONFIRMED");
+    expect(body.summary.rca).toBe("The liability-assignment scheduler was disabled.");
+    expect(body.summary.hypotheses).toHaveLength(1);
+    expect(body.steps).toHaveLength(1);
+  });
+
+  test("GET /api/timeline/:id still 404s for an investigation with no stored result", async () => {
+    server = createServer(0);
+    const created = await createInvestigation({ problemDescription: "in progress" });
+
+    const res = await fetch(new URL(`/api/timeline/${created.id}`, server.url));
+    expect(res.status).toBe(404);
+  });
+
+  test("GET /api/timeline/demo is unaffected — still returns only { steps }", async () => {
+    server = createServer(0);
+
+    const res = await fetch(new URL("/api/timeline/demo", server.url));
+    const body = (await res.json()) as Record<string, unknown>;
+
+    expect(body.steps).toBeDefined();
+    expect(body.summary).toBeUndefined();
+    expect(body.problemDescription).toBeUndefined();
   });
 });
