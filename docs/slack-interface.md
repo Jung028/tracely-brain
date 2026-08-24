@@ -148,7 +148,7 @@ Signatures below are copied from `src/slack/handler.ts` — keep this file in sy
 - **Orchestrates, does not investigate** — no investigation logic here, only:
   1. Strip the leading `<@BOT_ID>` mention token from the event text.
   2. Call `createInvestigation({ problemDescription, slackChannelId: event.channel, slackThreadTs })` to persist the record (starts in `status: "CREATED"`).
-  3. Call `beginInvestigating(investigation.id)` to transition `CREATED → INVESTIGATING` (see `docs/state-machine.md`). On failure, logs the error and falls back to a neutral `"INVESTIGATING"` status label rather than blocking the ack.
+  3. Call `beginInvestigating(investigation.id)` to transition `CREATED → INVESTIGATING` (see `docs/state-machine.md`). On failure, logs the error and falls back to the record's actual prior status (almost always `"CREATED"`) rather than blocking the ack.
   4. Post an immediate acknowledgment to the thread: `"Investigating — I'll post updates here. Full view: <link>\nStatus: <state>"`
   5. Call `investigateImpl(problemDescription, { sessionId: investigation.id })` without awaiting it — starts the long-running investigation.
   6. Hand off to `pollAndPost` (see below) with the promise, so progress posts and final result are handled asynchronously.

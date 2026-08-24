@@ -51,8 +51,9 @@ export async function handleAppMention(
   // if the record isn't actually still CREATED, which shouldn't happen —
   // nothing else touches a brand-new record before this call. A failure
   // here is logged but doesn't block the investigation from proceeding;
-  // the Slack-visible status line below falls back to a neutral label
-  // rather than failing the whole request over lifecycle bookkeeping.
+  // the Slack-visible status line below falls back to the record's actual
+  // prior status rather than failing the whole request over lifecycle
+  // bookkeeping.
   const began = await beginInvestigating(investigation.id);
   if (!began.ok) {
     console.error(`slack handler: beginInvestigating failed for ${investigation.id}: ${began.error}`);
