@@ -3,7 +3,7 @@ import { pollAndPost } from "../../src/slack/poller";
 import { registerSession, unregisterSession } from "../../src/session";
 import { createInvestigationState } from "../../src/agent/tools";
 import { proposeHypothesis } from "../../src/agent/hypotheses";
-import { createInvestigation, getInvestigation } from "../../src/investigations";
+import { beginInvestigating, createInvestigation, getInvestigation } from "../../src/investigations";
 import { truncateAll } from "../db-helpers";
 import type { InvestigationResult } from "../../src/agent/types";
 import type { PostMessageInput, PostMessageResult } from "../../src/slack/client";
@@ -27,6 +27,7 @@ function manualInterval() {
 describe("pollAndPost", () => {
   test("posts a progress update only when stepNumber has advanced, then posts the final CONFIRMED result", async () => {
     const investigation = await createInvestigation({ problemDescription: "test" });
+    await beginInvestigating(investigation.id);
     const sessionId = investigation.id;
     const state = createInvestigationState();
     registerSession(sessionId, state);
@@ -87,12 +88,13 @@ describe("pollAndPost", () => {
     expect(posts[1]!.text).toContain(`investigation=${investigation.id}`);
 
     const stored = await getInvestigation(investigation.id);
-    expect(stored!.status).toBe("CONFIRMED");
+    expect(stored!.status).toBe("RCA_IDENTIFIED");
     expect(stored!.result).not.toBeNull();
   });
 
   test("INSUFFICIENT_EVIDENCE result posts the NOT CONFIRMED report text", async () => {
     const investigation = await createInvestigation({ problemDescription: "test" });
+    await beginInvestigating(investigation.id);
     const sessionId = investigation.id;
     const state = createInvestigationState();
     registerSession(sessionId, state);
@@ -124,7 +126,7 @@ describe("pollAndPost", () => {
     expect(posts[0]!.text).toContain("NOT CONFIRMED");
 
     const stored = await getInvestigation(investigation.id);
-    expect(stored!.status).toBe("INSUFFICIENT_EVIDENCE");
+    expect(stored!.status).toBe("MANUAL_REVIEW_REQUIRED");
   });
 
   test("a failed progress-update postMessage call is logged and does not stop polling or crash", async () => {

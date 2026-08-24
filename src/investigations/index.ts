@@ -1,2 +1,9 @@
-export type { Investigation } from "./types";
-export { createInvestigation, completeInvestigation, getInvestigation } from "./db";
+export type { Investigation, InvestigationTransitionResult } from "./types";
+export {
+  beginInvestigating,
+  closeInvestigation,
+  completeInvestigation,
+  createInvestigation,
+  getInvestigation,
+  reopenInvestigation,
+} from "./db";

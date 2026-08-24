@@ -110,7 +110,7 @@ export function createServer(port: number = DEFAULT_PORT) {
       "/api/timeline/:id": {
         GET: async (req) => {
           const investigation = await getInvestigation(req.params.id);
-          if (!investigation || investigation.status === "IN_PROGRESS" || !investigation.result) {
+          if (!investigation || !investigation.result) {
             return new Response("not found", { status: 404 });
           }
           return Response.json(investigation.result.timeline);

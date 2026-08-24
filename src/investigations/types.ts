@@ -1,13 +1,16 @@
-// The persistent Investigation record (FR-33). Unlike src/session's
+// The persistent Investigation record (FR-33, FR-35). Unlike src/session's
 // in-memory registry (removed the moment investigate() resolves), this
 // survives indefinitely — FR-34's link may be clicked long after the
-// investigation finishes.
+// investigation finishes. `status` is now the full FR-35 lifecycle (see
+// src/state-machine/), not module 07's original 3-value placeholder.
 import type { InvestigationResult } from "../agent/types";
 import type { InvestigationTimeline } from "../timeline/types";
+import type { InvestigationState } from "../state-machine";
 
 export interface Investigation {
   readonly id: string;
-  readonly status: "IN_PROGRESS" | "CONFIRMED" | "INSUFFICIENT_EVIDENCE";
+  readonly status: InvestigationState;
+  readonly retryCount: number;
   readonly problemDescription: string;
   readonly slackChannelId: string | null;
   readonly slackThreadTs: string | null;
@@ -15,3 +18,7 @@ export interface Investigation {
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
+
+export type InvestigationTransitionResult =
+  | { ok: true; investigation: Investigation }
+  | { ok: false; error: string };

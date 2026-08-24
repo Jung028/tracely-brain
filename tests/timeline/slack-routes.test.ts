@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import { createServer } from "../../src/timeline/server";
-import { createInvestigation, completeInvestigation } from "../../src/investigations";
+import { beginInvestigating, createInvestigation, completeInvestigation } from "../../src/investigations";
 import { truncateAll } from "../db-helpers";
 import type { InvestigationResult } from "../../src/agent/types";
 import type { InvestigationTimeline } from "../../src/timeline/types";
@@ -169,7 +169,7 @@ describe("GET /api/timeline/:id", () => {
     expect(res.status).toBe(404);
   });
 
-  test("404s while the investigation is still IN_PROGRESS", async () => {
+  test("404s while the investigation is not yet complete", async () => {
     server = createServer(0);
     const investigation = await createInvestigation({ problemDescription: "test" });
 
@@ -181,6 +181,7 @@ describe("GET /api/timeline/:id", () => {
   test("returns the stored timeline, in the same shape as /api/timeline/demo, once complete", async () => {
     server = createServer(0);
     const investigation = await createInvestigation({ problemDescription: "test" });
+    await beginInvestigating(investigation.id);
 
     const result: InvestigationResult = {
       outcome: "INSUFFICIENT_EVIDENCE",
